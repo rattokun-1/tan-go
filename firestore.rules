@@ -1,0 +1,136 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function validLeaderboard(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'publicId', 'displayName', 'avatarId', 'avatarImage',
+          'weeklyXP', 'todayXP', 'streak', 'streakHistory', 'lastStudyDate',
+          'groupIds', 'heartsReceived', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'publicId', 'displayName', 'avatarId', 'avatarImage',
+          'weeklyXP', 'todayXP', 'streak', 'streakHistory', 'lastStudyDate',
+          'groupIds', 'heartsReceived', 'updatedAt', 'xp'
+        ])
+        && data.uid == userId
+        && data.publicId is string && data.publicId.matches('^[0-9]{7}$')
+        && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 40
+        && data.avatarId is string && data.avatarId.size() <= 40
+        && data.avatarImage is string && data.avatarImage.size() <= 350000
+        && data.weeklyXP is number && data.weeklyXP >= 0
+        && data.todayXP is number && data.todayXP >= 0
+        && (!('xp' in data) || (data.xp is number && data.xp >= 0))
+        && data.streak is int && data.streak >= 0 && data.streak <= 10000
+        && data.streakHistory is list && data.streakHistory.size() <= 90
+        && (data.lastStudyDate == null || data.lastStudyDate is string)
+        && data.groupIds is list && data.groupIds.size() <= 20
+        && data.heartsReceived is int && data.heartsReceived >= 0
+        && data.updatedAt == request.time;
+    }
+
+    function validGroup(data, userId) {
+      return data.keys().hasAll([
+          'publicId', 'name', 'type', 'parentGroupId', 'ownerUid', 'memberUids', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'publicId', 'name', 'type', 'parentGroupId', 'ownerUid', 'memberUids', 'createdAt'
+        ])
+        && data.publicId is string && data.publicId.matches('^[0-9]{7}$')
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 30
+        && data.type in ['personal', 'school']
+        && data.parentGroupId is string && data.parentGroupId.size() <= 128
+        && data.ownerUid == userId
+        && data.memberUids is list && data.memberUids.size() == 1
+        && data.memberUids[0] == userId
+        && data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow read: if isSelf(userId);
+      allow create, update: if isSelf(userId)
+        && request.resource.data.keys().hasOnly(['state', 'updatedAt'])
+        && request.resource.data.state is map
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+
+      match /friends/{friendId} {
+        allow read: if isSelf(userId);
+        allow create: if isSelf(userId) && friendId != userId
+          && request.resource.data.keys().hasOnly(['uid', 'publicId', 'displayName', 'addedAt'])
+          && request.resource.data.uid == friendId
+          && request.resource.data.publicId is string
+          && request.resource.data.displayName is string
+          && request.resource.data.addedAt == request.time;
+        allow delete: if isSelf(userId);
+        allow update: if false;
+      }
+
+      match /following/{followingId} {
+        allow read: if isSelf(userId);
+        allow create: if isSelf(userId) && followingId != userId
+          && request.resource.data.keys().hasOnly(['uid', 'displayName', 'createdAt'])
+          && request.resource.data.uid == followingId
+          && request.resource.data.displayName is string
+          && request.resource.data.createdAt == request.time;
+        allow delete: if isSelf(userId);
+        allow update: if false;
+      }
+
+      match /followers/{followerId} {
+        allow read: if isSelf(userId);
+        allow create: if signedIn() && request.auth.uid == followerId && userId != followerId
+          && request.resource.data.keys().hasOnly(['uid', 'displayName', 'createdAt'])
+          && request.resource.data.uid == followerId
+          && request.resource.data.displayName is string
+          && request.resource.data.createdAt == request.time;
+        allow delete: if signedIn() && request.auth.uid == followerId;
+        allow update: if false;
+      }
+
+      match /hearts/{senderId} {
+        allow read: if isSelf(userId) || (signedIn() && request.auth.uid == senderId);
+        allow create: if signedIn() && request.auth.uid == senderId && userId != senderId
+          && request.resource.data.keys().hasOnly(['fromUid', 'fromName', 'sentAt'])
+          && request.resource.data.fromUid == senderId
+          && request.resource.data.fromName is string
+          && request.resource.data.sentAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    match /leaderboard/{userId} {
+      allow read: if signedIn();
+      allow create: if isSelf(userId) && validLeaderboard(request.resource.data, userId);
+      allow update: if (isSelf(userId) && validLeaderboard(request.resource.data, userId))
+        || (signedIn()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['heartsReceived'])
+          && request.resource.data.heartsReceived == resource.data.get('heartsReceived', 0) + 1
+          && existsAfter(/databases/$(database)/documents/users/$(userId)/hearts/$(request.auth.uid)));
+      allow delete: if false;
+    }
+
+    match /groups/{groupId} {
+      // Authenticated users can look up a public group code to join a group.
+      allow read: if signedIn();
+      allow create: if signedIn() && validGroup(request.resource.data, request.auth.uid);
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+        && request.auth.uid in request.resource.data.memberUids
+        && !(request.auth.uid in resource.data.memberUids)
+        && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1
+        && request.resource.data.memberUids.size() <= 100
+        && request.resource.data.memberUids.hasAll(resource.data.memberUids);
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Deny every collection/document path not explicitly listed above.
+  }
+}

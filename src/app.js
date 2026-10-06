@@ -1489,27 +1489,27 @@ const leagues = [
   { id: "diamond", name: "ダイヤモンドリーグ", short: "ダイヤモンド", minXP: 5000, color: "#d6f7ff" }
 ];
 function currentLeague() { const xp = Number(state.weeklyXP || state.xp || 0); return leagues.reduce((current, league) => xp >= league.minXP ? league : current, leagues[0]); }
-const avatars = [
-  { id: "aqua", name: "Aqua", symbol: "✦", bg: "linear-gradient(145deg,#62e2d4,#5a7cff)" },
-  { id: "violet", name: "Violet", symbol: "◆", bg: "linear-gradient(145deg,#c59bff,#6957d6)" },
-  { id: "sunset", name: "Sunset", symbol: "●", bg: "linear-gradient(145deg,#ffc767,#ff7096)" },
-  { id: "forest", name: "Forest", symbol: "✿", bg: "linear-gradient(145deg,#7cdb8b,#178d7c)" },
-  { id: "mono", name: "Mono", symbol: "◇", bg: "linear-gradient(145deg,#f1f3f8,#697184)" }
-];
-function avatarFor(id) { return avatars.find(a => a.id === id) || avatars[0]; }
-function avatarMarkup(id, label = "", image = "") { const a = avatarFor(id); return image ? `<span class="avatar avatar-custom avatar-photo" aria-label="${escapeHTML(label || "プロフィール写真")}"><img src="${escapeHTML(image)}" alt="" /></span>` : `<span class="avatar avatar-custom" style="--avatar-bg:${a.bg}" aria-label="${escapeHTML(label || a.name)}">${a.symbol}</span>`; }
+function avatarMarkup(id, label = "", image = "") { return `<span class="avatar avatar-custom avatar-photo" aria-label="${escapeHTML(label || "プロフィール写真")}"><img src="${escapeHTML(image || "./user.png")}" alt="" /></span>`; }
 
 const todayKey = () => new Date().toISOString().slice(0, 10);
+const cleanInitialName = (name) => /^(ミナト|みなと|minato)$/i.test(String(name || "").trim()) ? "TANGO USER" : (name || "TANGO USER");
+function currentWeekKey(dateKey = todayKey()) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
 const defaultState = () => ({
   version: VERSION,
-  xp: 340,
-  level: 12,
-  coin: 140,
-  hp: 4,
-  combo: 3,
-  streak: 4,
-  weeklyXP: 340,
+  xp: 0,
+  level: 1,
+  coin: 0,
+  hp: 5,
+  hpUpdatedAt: Date.now(),
+  combo: 0,
+  streak: 0,
+  weeklyXP: 0,
   lastStudyDate: null,
+  lastLessonStampDate: null,
   streakHistory: [],
   completedLessons: [],
   words: {},
@@ -1519,12 +1519,14 @@ const defaultState = () => ({
   ownedThemes: ["midnight", "sakura", "ocean", "aurora", "ember", "lavender", "forest", "mono"],
   equippedTheme: "midnight",
   items: { hpStock: 1, streakKeep: 1 },
-  ownedBadges: ["first-step", "focus", "word-hunter", "perfect-five"],
-  equippedBadges: ["first-step", "focus"],
+  ownedBadges: [],
+  equippedBadges: [],
   history: [],
-  profile: { name: "ミナト", email: "", publicId: "", avatarId: "aqua", loggedIn: false },
-  settings: { dark: true, sound: true },
-  ui: { view: "home", modal: null, rankingTab: "weekly", authTab: "login", auto: false, socialTab: "global", selectedGroup: "" },
+  weeklyChallenge: { week: currentWeekKey(), studyDays: [], claimed: false },
+  studyGarden: { growth: 0, lastDay: null },
+  profile: { name: "TANGO USER", email: "", publicId: "", avatarId: "aqua", loggedIn: false },
+  settings: { dark: false, sound: true, lightUiMigration: true },
+  ui: { view: "home", modal: null, rankingTab: "weekly", authTab: "login", auto: false, socialTab: "global", selectedGroup: "", hubTab: "profile" },
   social: { friends: [], following: [], followers: [], groups: [], selectedProfile: null }
 });
 
@@ -1533,15 +1535,19 @@ function mergeState(saved) {
   if (!saved || typeof saved !== "object") return fresh;
   return {
     ...fresh, ...saved,
+    hp: Math.max(0, Math.min(30, Number(saved.hp ?? fresh.hp))),
+    hpUpdatedAt: Number(saved.hpUpdatedAt || Date.now()),
     daily: { ...fresh.daily, ...(saved.daily || {}) },
     streakHistory: Array.isArray(saved.streakHistory) ? saved.streakHistory.slice(-90) : fresh.streakHistory,
     items: { ...fresh.items, ...(saved.items || {}) },
-    profile: { ...fresh.profile, ...(saved.profile || {}) },
-    settings: { ...fresh.settings, ...(saved.settings || {}) },
-    ui: { ...fresh.ui, modal: null, view: "home", ...(saved.ui || {}) },
+    profile: { ...fresh.profile, ...(saved.profile || {}), name: cleanInitialName(saved.profile?.name) },
+    settings: { ...fresh.settings, ...(saved.settings || {}), dark: saved.settings?.lightUiMigration ? Boolean(saved.settings.dark) : false, lightUiMigration: true },
+    weeklyChallenge: { ...fresh.weeklyChallenge, ...(saved.weeklyChallenge || {}) },
+    studyGarden: { ...fresh.studyGarden, ...(saved.studyGarden || {}) },
+    ui: { ...fresh.ui, ...(saved.ui || {}), modal: null, view: ["profile", "friends", "collection"].includes(saved.ui?.view) ? "community" : (saved.ui?.view || "home"), hubTab: saved.ui?.hubTab || (["profile", "friends", "collection"].includes(saved.ui?.view) ? saved.ui.view : "profile") },
     social: { ...fresh.social, ...(saved.social || {}) },
     ownedThemes: [...new Set([...(saved.ownedThemes || []), ...fresh.ownedThemes])],
-    ownedBadges: [...new Set([...(saved.ownedBadges || []), "word-hunter", "perfect-five"])],
+    ownedBadges: [...new Set(saved.ownedBadges || [])],
     equippedBadges: saved.equippedBadges || fresh.equippedBadges
   };
 }
@@ -1587,6 +1593,18 @@ let state = loadState();
 let learning = null;
 let feverTimer = null;
 let autoTimer = null;
+function recoverHP(now = Date.now()) {
+  const last = Number(state.hpUpdatedAt || now);
+  if (state.hp >= 30) { state.hpUpdatedAt = now; return false; }
+  const recovered = Math.floor(Math.max(0, now - last) / 3600000);
+  if (!recovered) return false;
+  state.hp = Math.min(30, state.hp + recovered);
+  state.hpUpdatedAt = last + recovered * 3600000;
+  if (state.hp === 30) state.hpUpdatedAt = now;
+  return true;
+}
+recoverHP();
+setInterval(() => { if (recoverHP()) { persist(); if (state.ui.view === "home") renderApp(); } }, 60000);
 
 function persist({ sync = true } = {}) {
   state.version = VERSION;
@@ -1635,7 +1653,9 @@ async function upsertLeaderboard() {
   if (!firebaseDb || !firebaseUser) return false;
   await ensurePublicId();
   const ref = firebaseDb.collection("leaderboard").doc(firebaseUser.uid);
-  const payload = { uid: firebaseUser.uid, publicId: state.profile.publicId, displayName: state.profile.name || "表示名未設定", avatarId: state.profile.avatarId || "aqua", avatarImage: state.profile.avatarImage || "", weeklyXP: Number(state.weeklyXP || 0), todayXP: Number(state.daily?.date === todayKey() ? state.daily.words * 2 : 0), streak: Number(state.streak || 0), streakHistory: state.streakHistory || [], lastStudyDate: state.lastStudyDate || null, groupIds: (state.social?.groups || []).map(g => g.id), heartsReceived: Number(state.profile.heartsReceived || 0), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  const existing = await ref.get();
+  const payload = { uid: firebaseUser.uid, publicId: state.profile.publicId, displayName: state.profile.name || "表示名未設定", avatarId: state.profile.avatarId || "aqua", avatarImage: state.profile.avatarImage || "", weeklyXP: Number(state.weeklyXP || 0), todayXP: Number(state.daily?.date === todayKey() ? state.daily.words * 2 : 0), streak: Number(state.streak || 0), streakHistory: state.streakHistory || [], lastStudyDate: state.lastStudyDate || null, groupIds: (state.social?.groups || []).map(g => g.id), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  if (!existing.exists) payload.heartsReceived = 0;
   await ref.set(payload, { merge: true });
   return true;
 }
@@ -1706,8 +1726,12 @@ async function followUser(uid, displayName = "未設定") {
 }
 async function sendHeart(uid) {
   if (!firebaseDb || !firebaseUser || uid === firebaseUser.uid) return;
-  await firebaseDb.collection("users").doc(uid).collection("hearts").doc(firebaseUser.uid).set({ fromUid: firebaseUser.uid, fromName: state.profile.name || "表示名未設定", sentAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  await firebaseDb.collection("leaderboard").doc(uid).set({ heartsReceived: firebase.firestore.FieldValue.increment(1) }, { merge: true });
+  const heartRef = firebaseDb.collection("users").doc(uid).collection("hearts").doc(firebaseUser.uid);
+  if ((await heartRef.get()).exists) { toast("このユーザーにはハートを送信済みです。", "normal"); return; }
+  const batch = firebaseDb.batch();
+  batch.set(heartRef, { fromUid: firebaseUser.uid, fromName: state.profile.name || "表示名未設定", sentAt: firebase.firestore.FieldValue.serverTimestamp() });
+  batch.set(firebaseDb.collection("leaderboard").doc(uid), { heartsReceived: firebase.firestore.FieldValue.increment(1) }, { merge: true });
+  await batch.commit();
   if (state.social.selectedProfile) state.social.selectedProfile.heartsReceived = Number(state.social.selectedProfile.heartsReceived || 0) + 1;
   renderApp(); toast("ハートをプレゼントしたよ", "good");
 }
@@ -1746,8 +1770,10 @@ async function joinGroup(publicId) {
   const clean = publicId.trim(); if (!/^\d{7}$/.test(clean)) { toast("グループIDを入力してください", "bad"); return; }
   const result = await firebaseDb.collection("groups").where("publicId", "==", clean).limit(1).get();
   if (result.empty) { toast("そのグループIDは見つかりませんでした", "bad"); return; }
-  const doc = result.docs[0]; await doc.ref.update({ memberUids: firebase.firestore.FieldValue.arrayUnion(firebaseUser.uid) });
-  const joined = { id: doc.id, ...doc.data(), memberUids: [...(doc.data().memberUids || []), firebaseUser.uid] };
+  const doc = result.docs[0]; const existingMembers = doc.data().memberUids || [];
+  if (existingMembers.includes(firebaseUser.uid)) { toast("すでに参加しているグループです。", "normal"); return; }
+  await doc.ref.update({ memberUids: firebase.firestore.FieldValue.arrayUnion(firebaseUser.uid) });
+  const joined = { id: doc.id, ...doc.data(), memberUids: [...existingMembers, firebaseUser.uid] };
   state.social.groups = [...(state.social.groups || []).filter(g => g.id !== doc.id), joined];
   state.ui.selectedGroup = doc.id; persist({ sync: false }); renderApp(); loadSocial().catch(() => {}); loadLeaderboard().catch(() => {}); toast("グループに参加しました", "good");
 }
@@ -1776,8 +1802,9 @@ function initFirebase() {
     firebaseAuth.onAuthStateChanged(async user => {
       firebaseUser = user || null;
       if (user) {
-        state.profile.loggedIn = true; state.profile.email = user.email || ""; state.profile.name = user.displayName || state.profile.name || "表示名未設定"; await ensurePublicId(); writeStateCookie(state);
-        try { await pullCloudState(); await loadSocial(); renderApp(); toast(syncStatus.state === "synced" ? "学習データを同期しました。" : "ログインしました。端末の学習データを保持しています。", syncStatus.state === "synced" ? "good" : "normal"); } catch { renderApp(); toast("ログインしました。学習データは端末に保存されています。", "normal"); }
+        state.profile.loggedIn = true; state.profile.email = user.email || ""; state.profile.name = cleanInitialName(user.displayName || state.profile.name || "TANGO USER"); await ensurePublicId(); writeStateCookie(state);
+        try { await pullCloudState(); await upsertLeaderboard(); await loadSocial(); renderApp(); toast(syncStatus.state === "synced" ? "学習データを同期しました。" : "ログインしました。端末の学習データを保持しています。", syncStatus.state === "synced" ? "good" : "normal"); } catch { renderApp(); toast("ログインしました。学習データは端末に保存されています。", "normal"); }
+        if (state.ui.view === "ranking") loadLeaderboard();
       } else if (state.profile.loggedIn) { state.profile.loggedIn = false; state.profile.email = ""; writeStateCookie(state); renderApp(); }
     });
   } catch { firebaseAuth = firebaseDb = null; }
@@ -1788,7 +1815,7 @@ function resetDailyIfNeeded() {
 function levelRemaining() { return Math.max(0, 500 - state.xp); }
 function levelProgress() { return Math.min(100, (state.xp / 500) * 100); }
 function totalCompleted() { return state.completedLessons.length; }
-function isUnlocked(lessonIndex) { return lessonIndex <= totalCompleted(); }
+function isUnlocked() { return true; }
 function mastery(wordId) { return state.words[wordId]?.mastery ?? 0; }
 function masteryText(score) {
   if (score <= 20) return "NEW";
@@ -1798,7 +1825,7 @@ function masteryText(score) {
   return "MASTERED";
 }
 function wordFontSize(word) {
-  return Math.max(22, Math.min(46, Math.round(470 / word.length)));
+  return Math.max(26, Math.min(60, Math.round(600 / Math.max(1, word.length))));
 }
 function escapeHTML(s = "") { return String(s).replace(/[&<>'"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[c])); }
 function badgeName(id) { return badges.find(b => b.id === id)?.name || "BADGE"; }
@@ -1824,53 +1851,89 @@ function tone(type = "good") {
   } catch { /* audio is optional */ }
 }
 function navHtml(active) {
-  const items = [["home", "ホーム", "home"], ["path", "学習", "learn"], ["ranking", "ランキング", "rank"], ["friends", "フレンド", "friends"], ["collection", "コレクション", "collection"], ["profile", "マイページ", "user"]];
+  const items = [["home", "ホーム", "home"], ["path", "学習", "learn"], ["ranking", "ランキング", "rank"], ["community", "マイページ・仲間", "user"]];
   return `<nav class="bottom-nav" aria-label="メインナビゲーション">${items.map(([id, label, ico]) => `<button class="nav-item ${active === id ? "active" : ""}" data-nav="${id}" aria-label="${label}">${icons[ico]}<span>${label}</span></button>`).join("")}</nav>`;
 }
 function topBar(title, action = "") { return `<header class="top-bar"><button class="icon-btn" data-nav="home" aria-label="ホームに戻る">${icons.back}</button><h1>${title}</h1>${action || `<span style="width:44px"></span>`}</header>`; }
 
+function recordWeeklyChallengeStudy(dateKey) {
+  const week = currentWeekKey(dateKey);
+  if (state.weeklyChallenge.week !== week) state.weeklyChallenge = { week, studyDays: [], claimed: false };
+  if (!state.weeklyChallenge.studyDays.includes(dateKey)) state.weeklyChallenge.studyDays.push(dateKey);
+  if (!state.weeklyChallenge.claimed && state.weeklyChallenge.studyDays.length >= 3) {
+    state.weeklyChallenge.claimed = true;
+    state.coin += 50;
+    toast("週3日チャレンジ達成！ 50コインを獲得しました", "good");
+    tone("fever"); haptic([18, 35, 18]);
+  }
+}
+
 function renderHome() {
-  const goalDone = state.daily.lessons >= 1;
-  const dailyGoals = [state.daily.lessons >= 1, state.daily.words >= 3, state.daily.saved >= 1];
-  const dailyPercent = Math.round((dailyGoals.filter(Boolean).length / dailyGoals.length) * 100);
-  const monthlyTarget = 20;
-  const monthlyDone = Math.min(monthlyTarget, (state.completedLessons || []).length);
-  const monthlyPercent = Math.round((monthlyDone / monthlyTarget) * 100);
+  if (state.weeklyChallenge.week !== currentWeekKey()) state.weeklyChallenge = { week: currentWeekKey(), studyDays: [], claimed: false };
+  const dailyTarget = 10;
+  const dailyWords = state.daily.date === todayKey() ? Number(state.daily.words || 0) : 0;
+  const dailyPercent = Math.min(100, Math.round(dailyWords / dailyTarget * 100));
+  const gardenGrowth = Math.max(0, Number(state.studyGarden.growth || 0));
+  const garden = gardenGrowth >= 14 ? ["🌸", "花が咲きました", ""] : gardenGrowth >= 7 ? ["🌳", "木が大きく育っています", ""] : gardenGrowth >= 3 ? ["🌿", "葉っぱが増えてきました", ""] : gardenGrowth >= 1 ? ["🌱", "芽が出ました！", ""] : ["🌱", "種をまきました", "今日の学習で芽を育てよう"];
+  const gardenNext = gardenGrowth < 3 ? 3 : gardenGrowth < 7 ? 7 : gardenGrowth < 14 ? 14 : gardenGrowth + 7;
+  const canStudy = state.hp > 0;
+  const hpAction = state.items.hpStock > 0 ? `<button class="recovery-link" data-action="use-hp">回復ストックを使う</button>` : `<button class="recovery-link" data-action="capsule-info">HPの回復方法を見る</button>`;
+  const canDraw = state.coin >= 100;
   return `<main class="screen home-screen">
-    <header class="home-header"><div class="brand"><span class="brand-mark">T</span><span>TANGO</span></div><div class="header-actions"><button class="icon-btn" data-action="theme" aria-label="${state.settings.dark ? "ライトモード" : "ダークモード"}">${state.settings.dark ? icons.sun : icons.moon}</button><button class="home-auth-btn ${firebaseUser ? "connected" : ""}" data-action="${firebaseUser ? "logout" : "login"}">${firebaseUser ? "ログアウト" : "ログイン"}</button><button class="icon-btn" data-action="profile" aria-label="マイページ">${icons.user}</button></div></header>
-    <section class="home-status"><div class="home-status-item streak-stat"><span>${icons.flame}</span><b>${state.streak}</b><small>STREAK</small></div><div class="home-status-item hp-stat"><span>${icons.heart}</span><b>${state.hp}<em>/5</em></b><small>HP</small>${state.items.hpStock > 0 ? `<button class="status-action" data-action="use-hp">+${state.items.hpStock} 回復</button>` : ""}</div><div class="home-status-item coin-stat"><span>${icons.coin}</span><b>${state.coin}</b><small>COIN</small></div></section>
-    <section class="home-level-new"><div class="level-badge"><span>LV</span><b>${state.level}</b></div><div class="level-copy"><span class="eyebrow">NEXT LEVEL</span><strong>${500 - state.xp} XPでLv ${state.level + 1}</strong><div class="level-progress-row"><div class="progress-rail"><div class="progress-bar" style="--progress:${levelProgress()}%"></div></div><span>${Math.round(levelProgress())}%</span></div></div></section>
-    <section class="home-start"><div><span class="eyebrow">NEXT LESSON</span><h1>レッスンをはじめよう</h1><p>今日もレッスンをして連続記録を更新しよう</p></div><button class="primary-btn hero-start" data-start="1-1">レッスンを始める ${icons.arrow}</button></section>
-    <section class="home-missions"><div class="section-head"><h2 class="section-title">ミッション</h2><button class="text-link" data-action="missions">詳細 ${icons.arrow}</button></div><div class="mission-percent-grid"><button class="mission-percent-card" data-action="missions"><span>DAILY</span><b>${dailyPercent}%</b><div class="mini-progress"><i style="width:${dailyPercent}%"></i></div><small>今日の目標</small></button><button class="mission-percent-card" data-action="missions"><span>MONTHLY</span><b>${monthlyPercent}%</b><div class="mini-progress"><i style="width:${monthlyPercent}%"></i></div><small>${monthlyDone} / ${monthlyTarget} LESSONS</small></button></div></section>
-    <section class="home-utility"><button class="utility-card" data-action="capsule" ${state.coin < 100 ? "disabled" : ""}><span class="utility-icon">✦</span><span><b>コインガチャ</b><small>100コインでアイテム</small></span><strong>${state.coin >= 100 ? "引く" : "あと " + (100 - state.coin)}</strong></button><button class="utility-card" data-action="capsule-info"><span class="utility-icon">?</span><span><b>景品と確率</b><small>確認</small></span><strong>${icons.arrow}</strong></button><button class="utility-card" data-nav="friends"><span class="utility-icon">♡</span><span><b>フレンド</b><small>フレンドと連続記録を一緒に続けよう</small></span><strong>${icons.arrow}</strong></button></section>
+    <header class="home-header"><div class="brand"><span class="brand-mark">T</span><span>TANGO</span></div><div class="header-actions">${canDraw ? `<button class="gacha-ready-btn" data-action="capsule-menu" aria-label="ガチャを引く">✦ ガチャを引く</button>` : ""}<button class="icon-btn" data-action="theme" aria-label="${state.settings.dark ? "ライトモード" : "ダークモード"}">${state.settings.dark ? icons.sun : icons.moon}</button><button class="icon-btn home-profile-btn" data-action="profile" aria-label="マイページ">${avatarMarkup(state.profile.avatarId, state.profile.name, state.profile.avatarImage)}</button></div></header>
+    ${firebaseUser ? "" : `<button class="home-login-cta" data-action="login"><span class="login-cta-mark">G</span><span><b>Google / Apple でログイン</b><small>学習データを保存して、別の端末でも続ける</small></span>${icons.arrow}</button>`}
+    <div class="home-mini-stats" aria-label="学習ステータス"><span>Lv <b>${state.level}</b></span><span>✦ <b>${state.streak}</b>日</span><span>${icons.heart} <b>${state.hp}</b>/30</span><span>${icons.coin} <b>${state.coin}</b></span></div>
+    <section class="today-progress" aria-label="今日の学習進捗"><div class="today-progress-copy"><h2>今日の学習進捗</h2><strong>${dailyPercent}%<small> · ${Math.min(dailyWords, dailyTarget)} / ${dailyTarget}語</small></strong></div><div class="today-progress-track" role="progressbar" aria-label="今日の学習進捗" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${dailyPercent}"><i style="width:${dailyPercent}%"></i></div></section>
+    <section class="dashboard-welcome"><span class="eyebrow">${firebaseUser ? "今日もおかえりなさい" : "TANGO DAILY PRACTICE"}</span><h1>${escapeHTML(state.profile.name ? `こんにちは、${state.profile.name}さん` : "今日も一歩ずつ")}</h1></section>
+    <section class="study-garden-card ${gardenGrowth ? "growing" : "seed"}"><span class="garden-plant" aria-hidden="true">${garden[0]}</span><div class="garden-copy"><span class="eyebrow">まいにちの学びの木 · ${gardenGrowth}日</span><h2>${garden[1]}</h2><p>${gardenGrowth ? `次の成長まであと ${gardenNext - gardenGrowth}日` : garden[2]}</p></div><span class="garden-sun" aria-hidden="true">☀</span></section>
+    <section class="dashboard-lesson ${canStudy ? "" : "needs-hp"}"><div class="dashboard-lesson-copy"><span class="lesson-tag">今日の学習</span><h2>${canStudy ? "今日の10語を学ぼう" : "HPを回復しましょう"}</h2>${!canStudy ? `<p>時間経過で回復するか、回復ストックを使えます。</p>` : ""}</div>${canStudy ? `<button class="primary-btn dashboard-start" data-start="1-1">学習を始める <span>${icons.arrow}</span></button>` : `<div class="dashboard-hp-actions"><button class="primary-btn dashboard-start" disabled>HP回復後に学習を始める</button>${hpAction}</div>`}</section>
   </main>`;
 }
 function renderPath() {
   const unitCount = Math.ceil(vocab.length / 10);
-  return `<main class="screen unit-path-screen">${topBar("学習ユニット", `<span class="chip violet">${totalCompleted()} / ${unitCount}</span>`)}<section class="unit-path-hero"><div class="eyebrow">VOCABULARY</div><h2>単語学習</h2><p>短く集中して、復習期限が来た単語から定着させます。</p></section><section class="unit-grid">${Array.from({length: unitCount}, (_, i) => { const start = i * 10; const done = state.completedLessons.includes(i); const unlocked = i === 0 || state.completedLessons.includes(i - 1); const due = vocab.slice(start, start + 10).filter(reviewDue).length; return `<button class="unit-card-new ${done ? "complete" : ""} ${unlocked ? "" : "locked"}" ${unlocked ? `data-start="unit-${i + 1}"` : "disabled"}><span class="unit-index">${done ? icons.check : String(i + 1).padStart(2, "0")}</span><span class="unit-copy"><b>UNIT ${String(i + 1).padStart(2, "0")}</b><small>${start + 1}–${Math.min(start + 10, vocab.length)} · 10問</small>${due ? `<em>${due}語を復習</em>` : ""}</span><span class="unit-arrow">${unlocked ? icons.arrow : icons.lock}</span></button>`; }).join("")}</section></main>`;
+  const nodes = Array.from({length: unitCount}, (_, i) => { const start = i * 10; const done = state.completedLessons.includes(i); const due = vocab.slice(start, start + 10).filter(reviewDue).length; const x = [50, 72, 84, 72, 50, 28, 16, 28][i % 8]; return `<div class="lesson-path-node ${done ? "complete" : ""}" style="--node-x:${x}%;--node-y:${i * 112 + 12}px"><button class="unit-node-button ${done ? "complete" : ""}" data-start="unit-${i + 1}" aria-label="UNIT ${i + 1}・${start + 1}から${Math.min(start + 10, vocab.length)}語"><span class="unit-node-icon">${done ? icons.check : "✦"}</span><b>UNIT ${String(i + 1).padStart(2, "0")}</b><small>${start + 1}–${Math.min(start + 10, vocab.length)}語${due ? ` · 復習 ${due}` : ""}</small></button></div>`; });
+  const points = nodes.map((_, i) => ({ x: [150, 216, 252, 216, 150, 84, 48, 84][i % 8], y: i * 112 + 52 }));
+  const road = points.map((point, i) => { if (!i) return `M ${point.x} ${point.y}`; const previous = points[i - 1]; return `C ${previous.x} ${previous.y + 38}, ${point.x} ${point.y - 38}, ${point.x} ${point.y}`; }).join(" ");
+  const height = Math.max(220, unitCount * 112 + 30);
+  return `<main class="screen unit-path-screen">${topBar("学習ユニット", `<span class="chip violet">${totalCompleted()} / ${unitCount}</span>`)}<section class="unit-path-hero"><div class="eyebrow">VOCABULARY PATH</div><h2>一歩ずつ、単語の道を進もう</h2><p>好きなレッスンを選んで、ゴールまで進もう。</p></section><section class="lesson-path" style="--path-height:${height}px"><svg class="lesson-road" viewBox="0 0 300 ${height}" preserveAspectRatio="none" aria-hidden="true"><path d="${road}" /></svg>${nodes.join("")}</section></main>`;
 }
 function renderCollection() {
   const theme = themes.find(t => t.id === state.equippedTheme) || themes[0];
-  return `<main class="screen collection-screen">${topBar("コレクション", `<button class="icon-btn" data-nav="profile" aria-label="設定">${icons.gear}</button>`)}<section class="collection-hero-new" style="--theme-gradient:${theme.gradient}"><div><span class="eyebrow">COLLECTION</span><h1>集めて、着せ替えしよう！</h1><p>テーマとバッジで、自分の学習空間をつくろう。</p></div><div class="collection-total"><b>${state.ownedThemes.length + state.ownedBadges.length}</b><small>ITEMS</small></div></section><section class="collection-summary"><div><b>${state.ownedThemes.length}</b><span>THEMES</span></div><div><b>${state.ownedBadges.length}</b><span>BADGES</span></div><div><b>${state.history.length}</b><span>RECENT</span></div></section><section class="collection-section-new"><div class="section-head"><h2 class="section-title">装備中のテーマ</h2><span class="eyebrow">${theme.name}</span></div><div class="active-theme-preview-new" style="--theme-gradient:${theme.gradient}"><div class="theme-swatch"></div><div><b>${theme.name}</b><small>${theme.desc}</small></div><span>✓</span></div><button class="outline-btn collection-wide-action" data-nav="profile">テーマを変更する ${icons.arrow}</button></section><section class="collection-section-new"><div class="section-head"><h2 class="section-title">バッジ</h2><button class="text-link" data-action="badges">編集 ${icons.arrow}</button></div><div class="badge-grid-new">${badges.map(item => { const owned = state.ownedBadges.includes(item.id); const equipped = state.equippedBadges.includes(item.id); return `<button class="badge-card-new ${owned ? "owned" : "locked"} ${equipped ? "equipped" : ""}" data-action="badges"><span>${owned ? icons.spark : icons.lock}</span><b>${badgeName(item.id)}</b><small>${equipped ? "装備中" : owned ? "獲得済み" : "未獲得"}</small></button>`; }).join("")}</div></section><section class="collection-section-new"><div class="section-head"><h2 class="section-title">最近の獲得</h2><span class="eyebrow">HISTORY</span></div>${state.history.length ? `<div class="collection-history">${state.history.slice(0,4).map(item => `<div><span>${icons.spark}</span><b>${escapeHTML(item.name)}</b><small>${item.date}</small></div>`).join("")}</div>` : `<div class="empty-note">ガチャや達成報酬でアイテムを獲得できます。</div>`}</section></main>`;
+  return `<main class="screen collection-screen">${topBar("コレクション", `<button class="icon-btn" data-nav="profile" aria-label="設定">${icons.gear}</button>`)}<section class="collection-hero-new"><div><span class="eyebrow">COLLECTION</span><h1>集めて、着せ替えしよう！</h1><p>テーマとバッジで、自分の学習空間をつくろう。</p></div><div class="collection-total"><b>${state.ownedThemes.length + state.ownedBadges.length}</b><small>ITEMS</small></div></section><section class="collection-summary"><div><b>${state.ownedThemes.length}</b><span>THEMES</span></div><div><b>${state.ownedBadges.length}</b><span>BADGES</span></div><div><b>${state.history.length}</b><span>RECENT</span></div></section><section class="collection-section-new"><div class="section-head"><h2 class="section-title">装備中のテーマ</h2><span class="eyebrow">${theme.name}</span></div><div class="active-theme-preview-new" style="--theme-gradient:${theme.gradient}"><div class="theme-swatch"></div><div><b>${theme.name}</b><small>${theme.desc}</small></div><span>✓</span></div><button class="outline-btn collection-wide-action" data-nav="profile">テーマを変更する ${icons.arrow}</button></section><section class="collection-section-new"><div class="section-head"><h2 class="section-title">バッジ</h2><button class="text-link" data-action="badges">編集 ${icons.arrow}</button></div><div class="badge-grid-new">${badges.map(item => { const owned = state.ownedBadges.includes(item.id); const equipped = state.equippedBadges.includes(item.id); return `<button class="badge-card-new ${owned ? "owned" : "locked"} ${equipped ? "equipped" : ""}" data-action="badges"><span>${owned ? icons.spark : icons.lock}</span><b>${badgeName(item.id)}</b><small>${equipped ? "装備中" : owned ? "獲得済み" : "未獲得"}</small></button>`; }).join("")}</div></section><section class="collection-section-new"><div class="section-head"><h2 class="section-title">最近の獲得</h2><span class="eyebrow">HISTORY</span></div>${state.history.length ? `<div class="collection-history">${state.history.slice(0,4).map(item => `<div><span>${icons.spark}</span><b>${escapeHTML(item.name)}</b><small>${item.date}</small></div>`).join("")}</div>` : `<div class="empty-note">ガチャや達成報酬でアイテムを獲得できます。</div>`}</section></main>`;
 }
 function streakHistoryStrip(history = []) { const labels = ["月", "火", "水", "木", "金", "土", "日"]; const now = new Date(); const day = (now.getDay() + 6) % 7; const monday = new Date(now); monday.setHours(0,0,0,0); monday.setDate(now.getDate() - day); return labels.map((label,i) => { const date = new Date(monday); date.setDate(monday.getDate()+i); const key = date.toISOString().slice(0,10); return `<span class="friend-streak-day ${history.includes(key) ? "done" : ""} ${key === todayKey() ? "today" : ""}"><b>${label}</b><i>${history.includes(key) ? "✓" : ""}</i></span>`; }).join(""); }
 function renderFriendStreakModal() { const friends = state.social.friends || []; const active = friends.filter(f => f.lastStudyDate === todayKey()).length; return `<div class="modal-backdrop" data-close-modal><section class="modal friend-streak-detail" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">FRIEND STREAK</div><h2>一緒に続ける</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><div class="streak-team-hero"><div><span class="eyebrow">YOUR STREAK</span><strong>🔥 ${state.streak}日</strong><small>今日達成したフレンド ${active}人</small></div><span class="team-streak-mark">∞</span></div><p class="modal-sub">フレンドと同じ日に学習すると、相手の連続記録も確認できます。プロフィールからフォローやハートも送れます。</p><div class="friend-streak-detail-list">${friends.length ? friends.map(f => `<button class="friend-streak-detail-row" data-action="view-friend" data-user-id="${escapeHTML(f.uid)}"><span class="friend-streak-avatar">${(f.displayName || "? ").slice(0,1)}</span><span><b>${escapeHTML(f.displayName || "表示名未設定")}</b><small>🔥 ${Number(f.streak || 0)}日連続 · ${f.lastStudyDate === todayKey() ? "今日達成" : "未達成"}</small><em>${streakHistoryStrip(f.streakHistory || [])}</em></span><strong>${f.lastStudyDate === todayKey() ? "✓" : "—"}</strong></button>`).join("") : `<div class="empty-note">フレンドを追加すると、ここで連続記録を共有できます。</div>`}</div><button class="primary-btn" data-action="close-modal">閉じる</button></section></div>`; }
+function renderRanking() {
+  if (!firebaseUser) return `<main class="screen">${topBar("ランキング")}<section class="path-intro"><div class="eyebrow">RANKING</div><h2>学習仲間と競おう。</h2><p>ログインすると、週間・今日・連続記録のランキングを表示します。</p><button class="primary-btn small" data-action="login" style="margin-top:16px;width:100%">ログイン ${icons.arrow}</button></section></main>`;
+  const tabs = [["weekly", "週間"], ["today", "今日"], ["streak", "連続"]];
+  const metric = state.ui.rankingTab === "today" ? "todayXP" : state.ui.rankingTab === "streak" ? "streak" : "weeklyXP";
+  const rows = leaderboardState.rows || [];
+  return `<main class="screen ranking-screen">${topBar("ランキング")}<div class="segmented">${tabs.map(([id, label]) => `<button class="${state.ui.rankingTab === id ? "active" : ""}" data-rank-tab="${id}">${label}</button>`).join("")}</div><section class="ranking-list">${leaderboardState.loading ? `<div class="empty-note">ランキングを読み込み中…</div>` : leaderboardState.error ? `<div class="empty-note">${escapeHTML(leaderboardState.error)} <button class="text-link" data-action="reload-ranking">再読み込み</button></div>` : rows.length ? rows.map((row, index) => `<div class="rank-row ${row.uid === firebaseUser.uid ? "mine" : ""}"><b class="rank-place">${index + 1}</b><span class="rank-name">${escapeHTML(row.displayName || "表示名未設定")}</span><strong>${Number(row[metric] || 0)}${metric === "streak" ? "日" : " XP"}</strong></div>`).join("") : `<div class="empty-note">まだランキングデータがありません。学習するとここに表示されます。</div>`}</section></main>`;
+}
 function renderFriends() {
-  if (!firebaseUser) return `<main class="screen">${topBar("フレンド")}<section class="path-intro"><div class="eyebrow">FRIENDS</div><h2>一緒に続けよう。</h2><p>ログインすると、相手のプロフィールを見たり、フォロー・ハート・ランキングバトルを楽しめます。</p><button class="primary-btn small" data-action="login" style="margin-top:16px;width:100%">ログイン / 会員登録 ${icons.arrow}</button></section><div class="empty-note">ログイン後にフレンドを追加できます。</div></main>`;
+  if (!firebaseUser) return `<main class="screen">${topBar("フレンド")}<section class="path-intro"><div class="eyebrow">FRIENDS</div><h2>一緒に続けよう。</h2><p>ログインすると、相手のプロフィールを見たり、フォロー・ハート・ランキングバトルを楽しめます。</p><button class="primary-btn small" data-action="login" style="margin-top:16px;width:100%">ログイン ${icons.arrow}</button></section><div class="empty-note">ログイン後にフレンドを追加できます。</div></main>`;
   return `<main class="screen">${topBar("フレンド", `<button class="icon-btn" data-action="social-settings" aria-label="フレンド管理">${icons.user}</button>`)}<section class="friends-hero"><div class="eyebrow">FRIENDS</div><h2>学習仲間と競う。</h2><p>プロフィール、フォロー、ハート、ランキングバトルをここから。</p></section><section class="my-user-id-card"><div><span class="eyebrow">MY USER ID</span><strong>${escapeHTML(state.profile.publicId || "発行中")}</strong><small>この7桁IDを友だちに共有して追加してもらえます。</small></div><button class="outline-btn small" data-action="copy-user-id">コピー</button></section><section class="social-block friends-add"><h3>フレンドを追加</h3><form id="friend-form"><input name="friendUid" required placeholder="7桁のユーザーID" /><button class="primary-btn small" type="submit">追加</button></form></section><button class="friend-streak-panel" data-action="friend-streak"><div><span class="eyebrow">FRIEND STREAK</span><strong>一緒に続ける</strong><small>今日学習したフレンド ${state.social.friends.filter(f => f.lastStudyDate === todayKey()).length}人 · 詳細を見る</small></div><span class="friend-streak-fire">🔥</span></button><section class="friends-section"><div class="section-head"><h2 class="section-title">フレンド</h2><span class="eyebrow">${state.social.friends.length} PEOPLE</span></div>${state.social.friends.length ? `<div class="social-list">${state.social.friends.map(f => `<button class="friend-row friend-row-streak" data-action="view-friend" data-user-id="${escapeHTML(f.uid)}"><span>${escapeHTML(f.displayName || "表示名未設定")}<small>🔥 ${Number(f.streak || 0)}日連続${f.lastStudyDate === todayKey() ? " · 今日達成" : ""}</small></span><small>プロフィールを見る</small></button>`).join("")}</div>` : `<div class="empty-note">まだフレンドはいません。ユーザーIDで追加できます。</div>`}</section><section class="friends-section"><div class="section-head"><h2 class="section-title">バトル</h2><span class="eyebrow">RANKING</span></div><button class="outline-btn" data-action="friend-battle" style="width:100%">フレンドランキングを見る ${icons.arrow}</button></section></main>`;
 }
 function renderProfile() {
   const profileAvatar = avatarMarkup(state.profile.avatarId, state.profile.name, state.profile.avatarImage);
-  return `<main class="screen profile-screen">${topBar("マイページ", `<button class="primary-btn small" data-action="edit-profile">編集</button>`)}<section class="profile-hero-new"><div class="profile-avatar-wrap">${profileAvatar}<button class="avatar-edit-dot" data-action="edit-profile" aria-label="プロフィール画像を変更">＋</button></div><div class="profile-identity"><span class="eyebrow">${firebaseUser ? "ACCOUNT CONNECTED" : "LOCAL PROFILE"}</span><h1>${escapeHTML(state.profile.name || "ミナト")}</h1><p>${firebaseUser ? escapeHTML(state.profile.email || "TANGO Account") : "ログインしてデータを同期"}</p>${state.profile.publicId ? `<small class="public-id">ID <b>${escapeHTML(state.profile.publicId)}</b></small>` : ""}</div></section><section class="profile-level-card"><div class="profile-level-number"><small>LEVEL</small><b>${state.level}</b></div><div class="profile-level-copy"><div><span>次のレベルまで</span><strong>${500 - state.xp} XP</strong></div><div class="profile-level-progress"><i style="width:${levelProgress()}%"></i></div><small>${state.xp} / 500 XP</small></div></section><section class="profile-stat-grid"><div><b>${state.streak}</b><span>STREAK</span></div><div><b>${state.weeklyXP}</b><span>WEEKLY XP</span></div><div><b>${state.coin}</b><span>COINS</span></div><div><b>${state.ownedBadges.length}</b><span>BADGES</span></div></section><section class="profile-section-new"><div class="section-head"><h2 class="section-title">プロフィールを整える</h2></div><div class="profile-action-grid"><button data-action="edit-profile"><span>${icons.user}</span><b>プロフィール編集</b><small>表示名・画像・ID</small></button><button data-action="badges"><span>${icons.spark}</span><b>バッジを編集</b><small>${state.equippedBadges.length} / 3 装備中</small></button><button data-action="share"><span>${icons.share}</span><b>プロフィール共有</b><small>学習状況を共有</small></button><button data-nav="collection"><span>${icons.spark}</span><b>コレクション</b><small>テーマとアイテム</small></button></div></section><section class="settings-group"><h2>ACCOUNT</h2><div class="settings-list"><button class="setting-row" data-action="${firebaseUser ? "logout" : "login"}"><span class="setting-icon">${icons.user}</span><strong>${firebaseUser ? "ログアウト" : "ログイン / 会員登録"}</strong><span>${firebaseUser ? "接続中" : "データ同期"}</span>${icons.chevron}</button></div></section><section class="settings-group"><h2>SETTINGS</h2><div class="settings-list"><div class="setting-row theme-setting"><span class="setting-icon">${state.settings.dark ? icons.moon : icons.sun}</span><div class="setting-copy"><strong>テーマ</strong><span>${state.settings.dark ? "カラーテーマ" : "ライト"}</span></div><select class="theme-select" data-theme-select aria-label="テーマを選択">${themes.map(theme => `<option value="${theme.id}" ${state.equippedTheme === theme.id ? "selected" : ""}>${theme.name}</option>`).join("")}</select></div><div class="setting-row"><span class="setting-icon">${icons.volume}</span><strong>サウンド & Haptics</strong><button class="toggle ${state.settings.sound ? "on" : ""}" data-action="sound" aria-label="サウンド切替"><i></i></button></div></div></section><section class="settings-group"><h2>DATA</h2><div class="settings-list"><button class="setting-row" data-action="export-data"><span class="setting-icon">${icons.database}</span><strong>学習データを保存</strong><span>JSON</span>${icons.chevron}</button><button class="setting-row" data-action="import-data"><span class="setting-icon">${icons.arrow}</span><strong>学習データを復元</strong><span>JSON</span>${icons.chevron}</button><input id="data-file-input" type="file" accept="application/json,.json" hidden /></div></section></main>`;
+  return `<main class="screen profile-screen">${topBar("マイページ", `<button class="primary-btn small" data-action="edit-profile">編集</button>`)}<section class="profile-hero-new"><div class="profile-avatar-wrap">${profileAvatar}<button class="avatar-edit-dot" data-action="edit-profile" aria-label="プロフィール画像を変更">＋</button></div><div class="profile-identity"><span class="eyebrow">${firebaseUser ? "ACCOUNT CONNECTED" : "LOCAL PROFILE"}</span><h1>${escapeHTML(cleanInitialName(state.profile.name))}</h1><p>${firebaseUser ? escapeHTML(state.profile.email || "TANGO Account") : "ログインしてデータを同期"}</p>${state.profile.publicId ? `<small class="public-id">ID <b>${escapeHTML(state.profile.publicId)}</b></small>` : ""}</div></section><section class="profile-level-card"><div class="profile-level-number"><small>LEVEL</small><b>${state.level}</b></div><div class="profile-level-copy"><div><span>次のレベルまで</span><strong>${500 - state.xp} XP</strong></div><div class="profile-level-progress"><i style="width:${levelProgress()}%"></i></div><small>${state.xp} / 500 XP</small></div></section><section class="profile-stat-grid"><div><b>${state.streak}</b><span>STREAK</span></div><div><b>${state.weeklyXP}</b><span>WEEKLY XP</span></div><div><b>${state.coin}</b><span>COINS</span></div><div><b>${state.ownedBadges.length}</b><span>BADGES</span></div></section><section class="profile-section-new"><div class="section-head"><h2 class="section-title">プロフィールを整える</h2></div><div class="profile-action-grid"><button data-action="edit-profile"><span>${icons.user}</span><b>プロフィール編集</b><small>表示名・画像・ID</small></button><button data-action="badges"><span>${icons.spark}</span><b>バッジを編集</b><small>${state.equippedBadges.length} / 3 装備中</small></button><button data-action="share"><span>${icons.share}</span><b>プロフィール共有</b><small>学習状況を共有</small></button><button data-nav="collection"><span>${icons.spark}</span><b>コレクション</b><small>テーマとアイテム</small></button></div></section><section class="settings-group"><h2>ACCOUNT</h2><div class="settings-list"><button class="setting-row" data-action="${firebaseUser ? "logout" : "login"}"><span class="setting-icon">${icons.user}</span><strong>${firebaseUser ? "ログアウト" : "ログイン / 会員登録"}</strong><span>${firebaseUser ? "接続中" : "データ同期"}</span>${icons.chevron}</button></div></section><section class="settings-group"><h2>SETTINGS</h2><div class="settings-list"><div class="setting-row theme-setting"><span class="setting-icon">${state.settings.dark ? icons.moon : icons.sun}</span><div class="setting-copy"><strong>テーマ</strong><span>${state.settings.dark ? "カラーテーマ" : "ライト"}</span></div><select class="theme-select" data-theme-select aria-label="テーマを選択">${themes.map(theme => `<option value="${theme.id}" ${state.equippedTheme === theme.id ? "selected" : ""}>${theme.name}</option>`).join("")}</select></div><div class="setting-row"><span class="setting-icon">${icons.volume}</span><strong>サウンド & Haptics</strong><button class="toggle ${state.settings.sound ? "on" : ""}" data-action="sound" aria-label="サウンド切替"><i></i></button></div></div></section> </main>`;
 }
+function renderCommunity() {
+  const tab = ["profile", "friends", "collection"].includes(state.ui.hubTab) ? state.ui.hubTab : "profile";
+  const page = tab === "friends" ? renderFriends() : tab === "collection" ? renderCollection() : renderProfile();
+  const content = page.replace(/^<main[^>]*>/, "").replace(/<\/main>$/, "").replace(/<header class="top-bar">[\s\S]*?<\/header>/, "");
+  const actions = tab === "profile" ? `<button class="primary-btn small" data-action="edit-profile">編集</button>` : tab === "friends" ? `<button class="icon-btn" data-action="social-settings" aria-label="フレンド管理">${icons.gear}</button>` : "";
+  const tabs = [["profile", "プロフィール"], ["friends", "フレンド"], ["collection", "コレクション"]];
+  return `<main class="screen community-screen">${topBar("マイページ", actions)}<nav class="hub-tabs" aria-label="マイページメニュー">${tabs.map(([id, label]) => `<button class="${tab === id ? "active" : ""}" data-hub-tab="${id}" aria-current="${tab === id ? "page" : "false"}">${label}</button>`).join("")}</nav><div class="hub-content">${content}</div></main>`;
+}
+
 function renderModal() {
   const modal = state.ui.modal;
   if (!modal) return "";
   if (modal === "login") {
-    const signup = state.ui.authTab === "signup";
-    return `<div class="modal-backdrop" data-close-modal><section class="modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><div class="modal-head"><div><div class="eyebrow">TANGO ACCOUNT</div><h2 id="auth-title">${signup ? "会員登録" : "ログイン"}</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><p class="modal-sub">ログインすると、学習データをアカウントに同期できます。</p><div class="auth-tabs"><button data-auth-tab="login" class="${!signup ? "active" : ""}">ログイン</button><button data-auth-tab="signup" class="${signup ? "active" : ""}">会員登録</button></div><form id="auth-form"><div class="field"><label for="email">メールアドレス</label><input id="email" name="email" type="email" required placeholder="you@example.com" /></div><div class="field"><label for="password">パスワード</label><input id="password" name="password" type="password" minlength="6" required placeholder="6文字以上" /></div><button class="primary-btn" type="submit">${signup ? "会員登録する" : "ログインする"} ${icons.arrow}</button></form><p class="firebase-note">${isFirebaseConfigured() ? "アカウント機能を利用できます。" : "ログインしなくても学習できます。ログインするとデータをアカウントに同期できます。"}</p></section></div>`;
+    return `<div class="modal-backdrop" data-close-modal><section class="modal oauth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><div class="oauth-brand"><span class="brand-mark">T</span></div><button class="icon-btn oauth-close" data-action="close-modal" aria-label="閉じる">${icons.close}</button><div class="oauth-heading"><span class="eyebrow">YOUR LEARNING, IN SYNC</span><h2 id="auth-title">TANGOにログイン</h2><p>学習の記録を保存して、どの端末からでも続けよう。</p></div><div class="oauth-options"><button class="oauth-btn google" data-auth-provider="google" ${!isFirebaseConfigured() ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.23c0-.72-.06-1.42-.18-2.09H12v3.95h5.38a4.6 4.6 0 0 1-2 3.02v2.55h3.25c1.9-1.75 2.97-4.33 2.97-7.43Z"/><path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.63-2.44l-3.25-2.55c-.9.6-2.05.96-3.38.96-2.6 0-4.8-1.75-5.59-4.1H3.05v2.63A10 10 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.41 13.87A6 6 0 0 1 6.1 12c0-.65.11-1.28.31-1.87V7.5H3.05A10 10 0 0 0 2 12c0 1.62.39 3.15 1.05 4.5l3.36-2.63Z"/><path fill="#EA4335" d="M12 6.03c1.47 0 2.79.5 3.83 1.52l2.87-2.87A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.95 5.5l3.36 2.63c.79-2.35 2.99-4.1 5.59-4.1Z"/></svg><span>Googleで続ける</span></button><button class="oauth-btn apple" data-auth-provider="apple" ${!isFirebaseConfigured() ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.37 12.12c.02 2.26 1.98 3.01 2 3.02-.02.05-.31 1.07-1.03 2.12-.62.9-1.27 1.79-2.29 1.8-1 .02-1.33-.58-2.49-.58s-1.52.56-2.47.6c-.98.04-1.73-.97-2.36-1.87-1.28-1.86-2.26-5.25-.94-7.54a3.64 3.64 0 0 1 3.06-1.86c.96-.02 1.87.65 2.47.65.59 0 1.7-.8 2.87-.68.49.02 1.87.2 2.76 1.5-.07.05-1.65.97-1.63 2.84ZM14.49 5.9a3.4 3.4 0 0 0 .8-2.43 3.47 3.47 0 0 0-2.25 1.15 3.2 3.2 0 0 0-.82 2.35 2.9 2.9 0 0 0 2.27-1.07Z"/></svg><span>Appleで続ける</span></button></div><p class="oauth-privacy">GoogleまたはAppleの認証を使います。パスワードをTANGOに入力する必要はありません。</p>${isFirebaseConfigured() ? "" : `<p class="oauth-setup-note">ログイン機能がまだ設定されていません。</p>`}</section></div>`;
   }
-  if (modal === "edit-profile") return `<div class="modal-backdrop" data-close-modal><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">PROFILE</div><h2>プロフィールを編集</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><p class="modal-sub">表示名はランキングにも表示されます。メールアドレスから自動で名前を作ることはありません。</p>${state.profile.publicId ? `<div class="public-id-card">あなたのユーザーID <b>${escapeHTML(state.profile.publicId)}</b><small>フレンド追加にこの7桁IDを使います。</small></div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">表示名</label><input id="display-name" name="displayName" maxlength="20" required value="${escapeHTML(state.profile.name || "TANGO USER")}" /></div><div class="field"><label for="avatar-id">プロフィールアイコン</label><select id="avatar-id" name="avatarId" class="avatar-select">${avatars.map(a => `<option value="${a.id}" ${state.profile.avatarId === a.id ? "selected" : ""}>${a.symbol} ${a.name}</option>`).join("")}</select></div><div class="photo-upload-row">${avatarMarkup(state.profile.avatarId, state.profile.name, state.profile.avatarImage)}<div><label class="upload-btn" for="avatar-file-input">写真をアップロード</label><input id="avatar-file-input" type="file" accept="image/png,image/jpeg,image/webp" hidden /><small>端末内に保存。最大256pxに自動調整します。</small></div></div><button class="text-link remove-photo" type="button" data-action="remove-avatar-photo">写真を削除</button><button class="primary-btn" type="submit">保存する ${icons.arrow}</button></form><button class="outline-btn" data-action="badges" style="width:100%;margin-top:10px">バッジを編集</button></section></div>`;
+  if (modal === "edit-profile") return `<div class="modal-backdrop" data-close-modal><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">PROFILE</div><h2>プロフィールを編集</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><p class="modal-sub">表示名はランキングにも表示されます。メールアドレスから自動で名前を作ることはありません。</p>${state.profile.publicId ? `<div class="public-id-card">あなたのユーザーID <b>${escapeHTML(state.profile.publicId)}</b><small>フレンド追加にこの7桁IDを使います。</small></div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">表示名</label><input id="display-name" name="displayName" maxlength="20" required value="${escapeHTML(state.profile.name || "TANGO USER")}" /></div><div class="photo-upload-row">${avatarMarkup(state.profile.avatarId, state.profile.name, state.profile.avatarImage)}<div><label class="upload-btn" for="avatar-file-input">プロフィール写真を選ぶ</label><input id="avatar-file-input" type="file" accept="image/png,image/jpeg,image/webp" hidden /><small>端末内に保存。最大256pxに自動調整します。</small></div></div><button class="text-link remove-photo" type="button" data-action="reset-avatar-photo">デフォルト写真に戻す</button><button class="primary-btn" type="submit">保存する ${icons.arrow}</button></form><button class="outline-btn" data-action="badges" style="width:100%;margin-top:10px">バッジを編集</button></section></div>`;
   if (modal === "badges") {
     return `<div class="modal-backdrop" data-close-modal><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">PROFILE BADGES</div><h2>バッジを選ぶ</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><p class="modal-sub">プロフィールには最大3個まで装備できます。</p><div class="badge-options">${badges.map(b => { const owned = state.ownedBadges.includes(b.id); const active = state.equippedBadges.includes(b.id); return `<button class="badge-choice ${active ? "active" : ""}" data-badge="${b.id}" ${owned ? "" : "disabled"}>${active ? "● " : "○ "}${b.name}<br><span style="color:var(--muted);font-family:var(--font)">${owned ? b.note : "未獲得"}</span></button>`; }).join("")}</div></section></div>`;
   }
@@ -1883,13 +1946,13 @@ function renderModal() {
     const monthlyPercent = Math.round(monthlyDone / 20 * 100);
     return `<div class="modal-backdrop" data-close-modal><section class="modal mission-detail-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">MISSION CENTER</div><h2>ミッション</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><div class="mission-detail-hero"><div><span class="eyebrow">TODAY'S PROGRESS</span><h3>${dailyDone} / ${dailyItems.length} 完了</h3><p>毎日の小さな達成を積み重ねよう。</p></div><strong class="mission-detail-percent">${Math.round(dailyDone / dailyItems.length * 100)}%</strong></div><section class="mission-detail-section"><div class="mission-detail-title"><h3>DAILY</h3><span class="eyebrow">リセット 00:00</span></div>${dailyItems.map(item => `<div class="mission-task"><span class="mission-task-check ${item.current >= item.target ? "done" : ""}">${item.current >= item.target ? "✓" : ""}</span><span><b>${item.label}</b><small>${item.current} / ${item.target} · ${item.reward}</small></span><i><em style="width:${Math.min(100, Math.round(item.current / item.target * 100))}%"></em></i></div>`).join("")}</section><section class="mission-detail-section monthly"><div class="mission-detail-title"><h3>MONTHLY</h3><b>${monthlyPercent}%</b></div><p>今月のレッスン達成数に応じて、マイルストーン報酬を獲得できます。</p><div class="monthly-milestones"><span class="${monthlyDone >= 5 ? "reached" : ""}">5 LESSONS</span><span class="${monthlyDone >= 10 ? "reached" : ""}">10 LESSONS</span><span class="${monthlyDone >= 20 ? "reached" : ""}">20 LESSONS</span></div><div class="mini-progress"><i style="width:${monthlyPercent}%"></i></div><small>${monthlyDone} / 20 LESSONS</small></section><button class="primary-btn" data-action="close-modal">ホームに戻る ${icons.arrow}</button></section></div>`;
   }
-  if (modal === "capsule-info") return `<div class="modal-backdrop" data-close-modal><section class="modal capsule-info-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">ITEM CAPSULE · 100 COINS</div><h2>景品と排出確率</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><p class="modal-sub">1回100コイン。抽選は毎回独立しており、表示確率の合計は100%です。</p><div class="capsule-odds-list">${capsuleRewards.map(item => `<div class="capsule-odds-row"><span class="capsule-odds-icon">✦</span><span><b>${escapeHTML(item.name)}</b><small>${item.probability}%の確率</small></span><strong>${item.probability}%</strong><i><em style="width:${item.probability * 4}%"></em></i></div>`).join("")}</div><button class="primary-btn" data-action="close-modal">戻る</button></section></div>`;
+  if (modal === "capsule-info" || modal === "capsule-menu") return `<div class="modal-backdrop" data-close-modal><section class="modal capsule-menu-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">TANGO LUCKY CAPSULE</div><h2>今日の運だめし</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><div class="capsule-stage"><span class="capsule-orbit orbit-one">✦</span><span class="capsule-orbit orbit-two">✧</span><div class="capsule-big">${icons.spark}</div><span class="capsule-confetti confetti-one">✦</span><span class="capsule-confetti confetti-two">●</span><span class="capsule-confetti confetti-three">✧</span></div><div class="capsule-wallet"><span>あなたのコイン</span><strong>◉ ${state.coin}</strong></div><p class="capsule-menu-copy">学習でもらったコインでカプセルをひとつ開けよう。HPやコレクションアイテムが当たるよ。</p><div class="capsule-prize-preview">${capsuleRewards.map(item => `<div class="capsule-prize-chip"><span>${item.name.startsWith("HP") ? "💗" : item.name.includes("バッジ") ? "🏅" : "🎁"}</span><b>${escapeHTML(item.name)}</b><small>${item.probability}%</small></div>`).join("")}</div><button class="primary-btn capsule-draw-btn" data-action="capsule-draw" ${state.coin < 100 ? "disabled" : ""}>${state.coin >= 100 ? "100コインで回す　✦" : `あと ${100 - state.coin} コインで回せる`}</button><p class="capsule-fairness">1回100コイン · 排出確率は合計100%</p></section></div>`;
   if (modal === "friend-streak-details") return renderFriendStreakModal();
   if (modal.startsWith("streak:")) { const value = Number(modal.slice(7)) || state.streak; return `<div class="modal-backdrop streak-backdrop"><section class="streak-modal" role="dialog" aria-modal="true">${streakStampMarkup(value)}<button class="primary-btn" data-action="close-streak">連続記録を確認する ${icons.arrow}</button></section></div>`; }
   if (modal === "data") return `<div class="modal-backdrop" data-close-modal><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="eyebrow">LOCAL DATA</div><h2>この端末に保存中</h2></div><button class="icon-btn" data-action="close-modal" aria-label="閉じる">${icons.close}</button></div><p class="modal-sub">XP、コイン、HP、単語ごとの習熟度、苦手・保存語、進捗、ミッション、テーマ、バッジ、週間XP、設定はこのブラウザのCookieに保存されています。</p><div class="firebase-note">アプリの更新時にデータが壊れないよう、保存データにはバージョンを持たせています。ブラウザのサイトデータを削除すると、端末内のデータも削除されます。</div></section></div>`;
   if (modal.startsWith("capsule:")) {
     const prize = modal.slice(8);
-    return `<div class="modal-backdrop" data-close-modal><section class="modal capsule-result" role="dialog" aria-modal="true"><div class="eyebrow">ITEM CAPSULE</div><div class="capsule-visual pop">${icons.spark}</div><h3>${escapeHTML(prize)}</h3><p>コレクションに追加しました。</p><button class="primary-btn" data-action="close-modal">コレクションへ</button></section></div>`;
+    return `<div class="modal-backdrop" data-close-modal><section class="modal capsule-result" role="dialog" aria-modal="true"><span class="result-confetti">✦　✧　✦</span><div class="eyebrow">CAPSULE OPENED!</div><div class="capsule-visual pop">${icons.spark}</div><span class="capsule-result-label">今回のアイテム</span><h3>${escapeHTML(prize)}</h3><p>いい引き！コレクションに追加したよ。</p><button class="primary-btn" data-action="close-modal">受け取って戻る ${icons.arrow}</button></section></div>`;
   }
   return "";
 }
@@ -1899,12 +1962,14 @@ function renderApp() {
   clearAuto();
   const active = state.ui.view;
   document.body.dataset.theme = state.settings.dark ? state.equippedTheme : "light";
-  const main = active === "home" ? renderHome() : active === "path" ? renderPath() : active === "ranking" ? renderRanking() : active === "friends" ? renderFriends() : active === "collection" ? renderCollection() : renderProfile();
+  const main = active === "home" ? renderHome() : active === "path" ? renderPath() : active === "ranking" ? renderRanking() : active === "community" ? renderCommunity() : renderProfile();
   app.innerHTML = `<div class="app-shell">${main}${navHtml(active)}${renderModal()}</div>`;
   persist();
 }
 
 function parseLessonIndex(id) {
+  const unit = String(id).match(/^unit-(\d+)$/);
+  if (unit) return Number(unit[1]) - 1;
   const nums = String(id).split("-").map(Number);
   if (nums.length === 3 && nums.every(Number.isFinite)) return (nums[0] - 1) * 9 + (nums[1] - 1) * 3 + (nums[2] - 1);
   return 0;
@@ -1912,19 +1977,21 @@ function parseLessonIndex(id) {
 function reviewDue(word) { const d = state.words[word.id]; return Boolean(d && d.nextReviewAt && d.nextReviewAt <= Date.now()); }
 function dueReviewWords() { return vocab.filter(reviewDue).sort((a,b) => scoreForReview(b) - scoreForReview(a)); }
 function chooseLessonWords(lessonIndex) {
-  const due = dueReviewWords().slice(0, 2);
-  const start = (lessonIndex * 5) % vocab.length;
-  const fresh = [];
-  for (let i = 0; fresh.length < 3 && i < vocab.length; i++) {
-    const word = vocab[(start + i) % vocab.length];
-    if (!due.some(item => item.id === word.id)) fresh.push(word);
-  }
-  return [...due, ...fresh];
+  const unitWords = vocab.slice(Math.max(0, lessonIndex) * 10, Math.max(0, lessonIndex) * 10 + 10);
+  return unitWords.slice().sort(() => Math.random() - 0.5);
 }
 function chooseReviewWords() {
   const due = dueReviewWords();
   if (due.length) return due.slice(0, 5);
   return vocab.slice().sort((a, b) => scoreForReview(b) - scoreForReview(a)).slice(0, 5);
+}
+function questionMode() { return learning?.questionModes?.[learning.index] || "recall"; }
+function makeEnglishOptions(word) {
+  const distractors = vocab.filter(item => item.id !== word.id).slice();
+  for (let i = distractors.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [distractors[i], distractors[j]] = [distractors[j], distractors[i]]; }
+  const options = [word, ...distractors.slice(0, 3)];
+  for (let i = options.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [options[i], options[j]] = [options[j], options[i]]; }
+  return options;
 }
 function scoreForReview(word) {
   const d = state.words[word.id] || {}; const elapsed = d.lastSeen ? Math.min(50, Math.floor((Date.now() - d.lastSeen) / 86400000) * 7) : 20;
@@ -1937,43 +2004,61 @@ function startLearning(id) {
   const lessonIndex = id === "review" ? -1 : parseLessonIndex(id);
   if (lessonIndex >= 0 && !isUnlocked(lessonIndex)) { toast("このLESSONはまだ未解放です。", "bad"); return; }
   const words = id === "review" ? chooseReviewWords() : chooseLessonWords(lessonIndex);
-  learning = { id, lessonIndex, words, index: 0, revealed: false, testAnswered: false, auto: false, completed: false, spaced: words.some(word => reviewDue(word)) };
+  learning = { id, lessonIndex, words, index: 0, revealed: false, testAnswered: false, auto: false, completed: false, spaced: words.some(word => reviewDue(word)), questionModes: words.map((_, i) => ["recall", "meaning-select", "spelling"][i % 3]), englishOptions: words.map(makeEnglishOptions), spellingCorrect: false };
   state.ui.view = "learn"; state.ui.modal = null; renderLearning();
 }
 function currentWord() { return learning?.words[learning.index]; }
-function isTest() { return false; }
+function isTest() { return questionMode() !== "recall"; }
 function renderLearning() {
   if (!learning) { state.ui.view = "home"; renderApp(); return; }
   document.body.dataset.theme = state.settings.dark ? state.equippedTheme : "light";
   const word = currentWord(); const test = isTest(); const progress = ((learning.index) / learning.words.length) * 100;
+  const nextWord = learning.words[learning.index + 1];
+  const nextMode = learning.questionModes?.[learning.index + 1] || "recall";
+  const nextModeLabel = nextMode === "spelling" ? "英単語を書く問題" : nextMode === "meaning-select" ? "日本語から選ぶ問題" : "意味を思い出す問題";
+  const nextPreview = nextWord ? `<div class="next-word-preview" aria-hidden="true"><small>NEXT · ${String(learning.index + 2).padStart(2, "0")}</small><strong>次の問題</strong><span class="next-preview-mask">● ● ● ● ●</span><small>${nextModeLabel}</small></div>` : "";
   const saved = state.savedWords.includes(word.id); const difficult = state.difficultWords.includes(word.id);
-  const wordStage = test ? renderQuickTest(word) : `<div class="word-card" id="word-card"><div class="word-count">QUESTION ${String(learning.index + 1).padStart(2, "0")} / 10</div><div class="word-english" id="word-text" style="font-size:${wordFontSize(word.word)}px">${word.word}</div><div class="word-phonetic">${word.kana}</div><div class="tap-hint ${learning.revealed ? "" : ""}" id="tap-hint">${learning.revealed ? "答えを確認。思い出せたか自己判定しよう。" : `<span class="tap-dot"></span>まず意味を思い出してからタップ`}</div><div class="translation-wrap ${learning.revealed ? "show" : ""}" id="translation"><div class="translation-label">MEANING · RETRIEVAL FEEDBACK</div><div class="translation">${word.meaning}</div></div></div><div class="swipe-guide ${learning.revealed ? "show" : ""}" id="swipe-guide"><span class="no">← 覚えてない</span><span class="yes">覚えた →</span></div>`;
-  app.innerHTML = `<div class="app-shell learn-screen"><main class="screen learn-screen"><header class="learn-top"><button class="icon-btn" data-action="exit-learn" aria-label="学習を終了">${icons.close}</button><div class="learn-progress"><small>${test ? "REVIEW" : "UNIT · 10 QUESTIONS"}</small><div class="progress-rail"><div class="progress-bar" style="--progress:${progress}%"></div></div></div><button class="icon-btn" data-action="learn-info" aria-label="学習情報">${icons.info}</button></header><div class="learn-meta"><span>${reviewLabel(word)} · ${mastery(word.id)}%</span><span class="combo">${state.combo ? `${state.combo} COMBO` : ""}</span></div>${state.fever ? `<div class="fever-banner show" id="fever">${icons.spark} FEVER · XP ×2 · ${state.feverSeconds || 20}s</div>` : ""}<div class="word-stage" id="word-stage">${wordStage}</div><aside class="action-rail" aria-label="学習アクション"><div class="action-stack"><button class="action-orb" data-learn-action="pronounce" aria-label="発音">${icons.volume}</button><span>発音</span></div><div class="action-stack"><button class="action-orb ${saved ? "active" : ""}" data-learn-action="save" aria-label="保存">${icons.bookmark}</button><span>保存</span></div><div class="action-stack"><button class="action-orb ${difficult ? "active" : ""}" data-learn-action="difficult" aria-label="苦手">${icons.flag}</button><span>苦手</span></div><div class="action-stack"><button class="action-orb" data-learn-action="skip" aria-label="スキップ">${icons.skip}</button><span>スキップ</span></div><div class="action-stack"><button class="action-orb ${learning.auto ? "active" : ""}" data-learn-action="auto" aria-label="自動">${icons.auto}</button><span>自動</span></div><div class="action-stack"><button class="action-orb" data-learn-action="detail" aria-label="詳細">${icons.info}</button><span>詳細</span></div></aside>${!test ? `<div class="learn-actions"><button class="learn-answer no" id="no-answer" ${learning.revealed ? "" : "disabled"}>← 覚えてない</button><button class="learn-answer yes" id="yes-answer" ${learning.revealed ? "" : "disabled"}>覚えた →</button></div>` : ""}</main></div>`;
+  const currentCard = test ? `<div class="current-test-card">${renderQuickTest(word)}</div>` : `<div class="word-card" id="word-card"><div class="word-count">QUESTION ${String(learning.index + 1).padStart(2, "0")} / ${learning.words.length}</div><div class="word-english" id="word-text" style="font-size:${wordFontSize(word.word)}px">${word.word}</div><div class="word-phonetic">${word.kana}</div><div class="tap-hint" id="tap-hint">${learning.revealed ? "上へスワイプで覚えた、下へスワイプで復習。" : `<span class="tap-dot"></span>まず意味を思い出してからタップ`}</div><div class="translation-wrap ${learning.revealed ? "show" : ""}" id="translation"><div class="translation-label">MEANING · RETRIEVAL FEEDBACK</div><div class="translation">${word.meaning}</div></div></div><div class="swipe-guide ${learning.revealed ? "show" : ""}" id="swipe-guide"><span class="no">↓ 覚えていない</span><span class="yes">↑ 覚えた</span></div>`;
+  const wordStage = `${nextPreview}${currentCard}`;
+  const lessonLabel = learning.lessonIndex < 0 ? "復習" : `レッスン · ${learning.words.length}語`;
+  const actionRail = test ? "" : `<aside class="action-rail" aria-label="学習アクション"><div class="action-stack"><button class="action-orb" data-learn-action="pronounce" aria-label="発音">${icons.volume}</button><span>発音</span></div><div class="action-stack"><button class="action-orb ${saved ? "active" : ""}" data-learn-action="save" aria-label="保存">${icons.bookmark}</button><span>保存</span></div><div class="action-stack"><button class="action-orb ${difficult ? "active" : ""}" data-learn-action="difficult" aria-label="苦手">${icons.flag}</button><span>苦手</span></div><div class="action-stack"><button class="action-orb" data-learn-action="skip" aria-label="スキップ">${icons.skip}</button><span>スキップ</span></div><div class="action-stack"><button class="action-orb ${learning.auto ? "active" : ""}" data-learn-action="auto" aria-label="自動">${icons.auto}</button><span>自動</span></div><div class="action-stack"><button class="action-orb" data-learn-action="detail" aria-label="詳細">${icons.info}</button><span>詳細</span></div></aside>`;
+  app.innerHTML = `<div class="app-shell learn-screen"><main class="screen learn-screen"><header class="learn-top"><button class="icon-btn" data-action="exit-learn" aria-label="学習を終了">${icons.close}</button><div class="learn-progress"><small>${lessonLabel}</small><div class="progress-rail"><div class="progress-bar" style="--progress:${progress}%"></div></div><span class="question-mode-label">${test ? (questionMode() === "spelling" ? "英単語を書く" : "日本語から選ぶ") : "意味を思い出す"}</span></div><button class="icon-btn" data-action="learn-info" aria-label="学習情報">${icons.info}</button></header><div class="learn-meta"><span>${reviewLabel(word)} · ${mastery(word.id)}%</span><span class="combo">${state.combo ? `${state.combo} COMBO` : ""}</span></div>${state.fever ? `<div class="fever-banner show" id="fever">${icons.spark} FEVER · XP ×2 · ${state.feverSeconds || 20}s</div>` : ""}<div class="word-stage ${test ? "test-stage" : ""}" id="word-stage">${wordStage}</div>${actionRail}${!test ? `<div class="learn-actions"><button class="learn-answer no" id="no-answer" ${learning.revealed ? "" : "disabled"}>わからない・覚えていない</button><button class="learn-answer yes" id="yes-answer" ${learning.revealed ? "" : "disabled"}>覚えた ↑</button></div>` : ""}</main></div>`;
   persist();
   setupLearningEvents();
   if (learning.auto && !test) scheduleAuto();
 }
 function renderQuickTest(word) {
   const letters = ["A", "B", "C", "D"];
-  const correctIndex = word.options.indexOf(word.meaning);
-  return `<section class="quick-test"><div class="test-label">QUICK TEST</div><h2>${word.word}</h2><p>この単語の意味は？</p><div class="answers">${word.options.map((option, i) => `<button class="answer-btn" data-test-answer="${i}"><span class="answer-letter">${letters[i]}</span><strong>${option}</strong></button>`).join("")}</div><div id="test-result" class="test-result"></div></section>`;
+  const mode = questionMode();
+  if (mode === "spelling") return `<section class="quick-test spelling-test"><div class="test-label">WRITE IT</div><h2 class="spelling-prompt">${word.meaning}</h2><p>英単語を入力して答えよう</p><form id="spelling-form" autocomplete="off"><label class="visually-hidden" for="spelling-answer">英単語</label><input id="spelling-answer" name="answer" type="text" autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="英単語を入力" required /><button class="primary-btn spelling-submit" type="submit">答えを確認</button></form><button class="test-dont-know" data-action="dont-know">わからない</button><div id="test-result" class="test-result" aria-live="polite"></div></section>`;
+  const options = learning.englishOptions[learning.index] || makeEnglishOptions(word);
+  return `<section class="quick-test meaning-select-test"><div class="test-label">日本語から選ぶ</div><h2 class="meaning-prompt">${escapeHTML(word.meaning)}</h2><p>この意味に合う英単語は？</p><div class="answers">${options.map((option, i) => `<button class="answer-btn" data-test-answer="${i}"><span class="answer-letter">${letters[i]}</span><strong>${escapeHTML(option.word)}</strong></button>`).join("")}</div><button class="test-dont-know" data-action="dont-know">わからない</button><div id="test-result" class="test-result" aria-live="polite"></div></section>`;
 }
 function setupLearningEvents() {
   const stage = document.querySelector("#word-stage");
-  const card = document.querySelector("#word-card");
   if (!stage || isTest()) return;
-  let startX = 0; let deltaX = 0; let moved = false;
-  stage.addEventListener("pointerdown", e => { startX = e.clientX; deltaX = 0; moved = false; card?.setPointerCapture?.(e.pointerId); });
+  let startY = 0; let deltaY = 0; let moved = false; let pointerId = null;
+  stage.addEventListener("pointerdown", e => { startY = e.clientY; deltaY = 0; moved = false; pointerId = e.pointerId; });
   stage.addEventListener("pointermove", e => {
-    deltaX = e.clientX - startX; if (Math.abs(deltaX) > 8) moved = true;
-    if (learning.revealed && card) { card.classList.add("dragging"); card.style.transform = `translateX(${deltaX}px) rotate(${deltaX / 32}deg)`; }
+    if (e.pointerId !== pointerId) return;
+    deltaY = e.clientY - startY; if (Math.abs(deltaY) > 12) moved = true;
+    const card = document.querySelector("#word-card");
+    if (learning?.revealed && card) {
+      card.dataset.swipeDirection = deltaY < 0 ? "up" : "down";
+      card.style.setProperty("--swipe-progress", String(Math.min(1, Math.abs(deltaY) / 100)));
+    }
   });
-  stage.addEventListener("pointerup", () => {
+  const finishPointer = e => {
+    if (e.pointerId !== pointerId) return;
     if (!learning) return;
-    if (learning.revealed && Math.abs(deltaX) > 70) { animateSwipe(deltaX > 0); return; }
+    if (learning.revealed && Math.abs(deltaY) > 54) { animateSwipe(deltaY < 0); pointerId = null; return; }
     if (!moved && !learning.revealed) revealCurrent();
-    if (card) { card.classList.remove("dragging"); card.style.transform = ""; }
-  });
+    const card = document.querySelector("#word-card");
+    if (card) { delete card.dataset.swipeDirection; card.style.removeProperty("--swipe-progress"); }
+    pointerId = null;
+  };
+  stage.addEventListener("pointerup", finishPointer);
+  stage.addEventListener("pointercancel", finishPointer);
   document.querySelector("#yes-answer")?.addEventListener("click", () => animateSwipe(true));
   document.querySelector("#no-answer")?.addEventListener("click", () => animateSwipe(false));
 }
@@ -1981,7 +2066,7 @@ function revealCurrent() {
   if (!learning || learning.revealed || isTest()) return;
   learning.revealed = true;
   document.querySelector("#translation")?.classList.add("show");
-  const hint = document.querySelector("#tap-hint"); if (hint) hint.textContent = "意味を見たら、左右にスワイプ。";
+  const hint = document.querySelector("#tap-hint"); if (hint) hint.textContent = "覚えたら上へ。わからない単語は下へスワイプ。";
   document.querySelector("#swipe-guide")?.classList.add("show");
   document.querySelector("#yes-answer")?.removeAttribute("disabled"); document.querySelector("#no-answer")?.removeAttribute("disabled");
   haptic(8);
@@ -1989,8 +2074,8 @@ function revealCurrent() {
 function animateSwipe(known) {
   if (!learning || !learning.revealed) return;
   const card = document.querySelector("#word-card");
-  if (card) card.classList.add(known ? "is-out-right" : "is-out-left");
-  setTimeout(() => applyAnswer(known), 165);
+  if (card) card.classList.add(known ? "is-out-up" : "is-out-down");
+  setTimeout(() => applyAnswer(known), 290);
 }
 function updateWordData(word, known) {
   const existing = state.words[word.id] || { mastery: 0, correct: 0, wrong: 0, lastSeen: 0, intervalDays: 0 };
@@ -2015,7 +2100,7 @@ function addRewards(known) {
     state.combo += 1; tone("good"); haptic(12);
     if (state.combo > 0 && state.combo % 7 === 0) startFever();
   } else {
-    state.combo = 0; state.hp = Math.max(0, state.hp - 1); state.fever = false; clearFever(); tone("bad"); haptic([15, 35, 15]);
+    state.combo = 0; state.hp = Math.max(0, state.hp - 1); state.hpUpdatedAt = Date.now(); state.fever = false; clearFever(); tone("bad"); haptic([15, 35, 15]);
   }
 }
 function startFever() {
@@ -2028,42 +2113,71 @@ function clearAuto() { if (autoTimer) { clearTimeout(autoTimer); autoTimer = nul
 function scheduleAuto() { clearAuto(); autoTimer = setTimeout(() => { if (!learning || !learning.auto || isTest()) return; if (!learning.revealed) revealCurrent(); autoTimer = setTimeout(() => { if (learning?.auto) animateSwipe(true); }, 1050); }, 900); }
 function applyAnswer(known) {
   if (!learning) return;
-  const word = currentWord(); updateWordData(word, known); addRewards(known); state.daily.words += 1; if (!known) { state.hp = Math.max(0, state.hp - 1); if (state.hp === 0) toast("HPがなくなりました。ホームで回復できます。", "bad"); } persist();
+  const word = currentWord(); updateWordData(word, known); addRewards(known); state.daily.words += 1; if (!known && state.hp === 0) toast("HPがなくなりました。ホームで回復できます。", "bad"); persist();
   learning.index += 1; learning.revealed = false; learning.testAnswered = false;
   if (learning.index >= learning.words.length) return finishLearning();
   renderLearning();
 }
 function testAnswer(choice) {
   if (!learning || learning.testAnswered) return;
-  const word = currentWord(); const correct = word.options[choice] === word.meaning; learning.testAnswered = true;
-  document.querySelectorAll("[data-test-answer]").forEach(btn => { const isCorrect = word.options[Number(btn.dataset.testAnswer)] === word.meaning; btn.disabled = true; if (isCorrect) btn.classList.add("correct"); else if (Number(btn.dataset.testAnswer) === choice) btn.classList.add("wrong"); });
+  const word = currentWord(); const mode = questionMode(); const correct = mode === "meaning-select" ? learning.englishOptions[learning.index]?.[choice]?.id === word.id : word.options[choice] === word.meaning; learning.testAnswered = true;
+  document.querySelectorAll("[data-test-answer]").forEach(btn => { const index = Number(btn.dataset.testAnswer); const isCorrect = mode === "meaning-select" ? learning.englishOptions[learning.index]?.[index]?.id === word.id : word.options[index] === word.meaning; btn.disabled = true; if (isCorrect) btn.classList.add("correct"); else if (index === choice) btn.classList.add("wrong"); });
   const result = document.querySelector("#test-result"); if (result) { result.className = `test-result ${correct ? "good" : "bad"}`; result.textContent = correct ? "正解！ この調子。" : `おしい。正解は「${word.meaning}」。`; }
-  setTimeout(() => applyAnswer(correct), 780);
+  setTimeout(() => applyAnswer(correct), 850);
+}
+function checkSpelling(event) {
+  event.preventDefault();
+  if (!learning || learning.testAnswered || questionMode() !== "spelling") return;
+  const word = currentWord();
+  const input = document.querySelector("#spelling-answer");
+  const button = document.querySelector(".spelling-submit");
+  const result = document.querySelector("#test-result");
+  const correct = String(input?.value || "").trim().toLocaleLowerCase() === word.word.toLocaleLowerCase();
+  learning.testAnswered = true; learning.spellingCorrect = correct;
+  if (input) input.disabled = true;
+  if (button) { button.disabled = true; button.textContent = "判定しました"; }
+  document.querySelector(".test-dont-know")?.setAttribute("disabled", "");
+  if (result) { result.className = `test-result ${correct ? "good" : "bad"}`; result.textContent = correct ? "正解！自分で書けました。" : `おしい。正解は「${word.word}」。次で取り返そう。`; }
+  if (correct) { tone("good"); haptic(12); } else { tone("bad"); haptic(10); }
+  setTimeout(() => applyAnswer(correct), 1100);
+}
+function dontKnowTestAnswer() {
+  if (!learning || learning.testAnswered) return;
+  learning.testAnswered = true;
+  document.querySelectorAll("[data-test-answer], #spelling-answer, .spelling-submit, .test-dont-know").forEach(el => { el.disabled = true; });
+  const result = document.querySelector("#test-result");
+  if (result) { result.className = "test-result bad"; result.textContent = `正解は「${currentWord().word}」 · 次の問題へ進みます`; }
+  tone("bad"); haptic(10);
+  setTimeout(() => applyAnswer(false), 500);
 }
 function streakStampMarkup(streak) {
   const labels = ["月", "火", "水", "木", "金", "土", "日"];
   const now = new Date(); const day = (now.getDay() + 6) % 7; const monday = new Date(now); monday.setHours(0,0,0,0); monday.setDate(now.getDate() - day);
   const days = labels.map((label, i) => { const date = new Date(monday); date.setDate(monday.getDate() + i); const key = date.toISOString().slice(0,10); return { label, key, done: (state.streakHistory || []).includes(key), today: key === todayKey() }; });
-  return `<div class="streak-stamp"><div class="streak-flame">🔥</div><strong>${streak}</strong><h3>日連続記録</h3><div class="streak-week">${days.map(d => `<div class="streak-day ${d.done ? "done" : ""} ${d.today ? "today" : ""}"><span>${d.label}</span><b>${d.done ? "✓" : ""}</b></div>`).join("")}</div><p><b>${escapeHTML(state.profile.name || "あなた")}</b>さん、今日も連続記録を更新しました。</p></div>`;
+  return `<div class="streak-stamp"><div class="streak-celebration"><span class="streak-success-mark">${icons.check}</span><div><span class="eyebrow">TODAY COMPLETE</span><h2>今日の学習、完了！</h2></div></div><div class="streak-count-card"><span class="streak-flame">✦</span><strong>${streak}</strong><span>日連続</span><p><b>${escapeHTML(state.profile.name || "TANGO USER")}</b>さんの記録が続いています。</p></div><div class="streak-week">${days.map(d => `<div class="streak-day ${d.done ? "done" : ""} ${d.today ? "today" : ""}"><span>${d.label}</span><b>${d.done ? "✓" : ""}</b></div>`).join("")}</div><p class="streak-encouragement">次の1日も、短い学習から。</p></div>`;
 }
 function finishLearning() {
   clearAuto(); clearFever();
   state.fever = false;
   const wasLesson = learning.lessonIndex >= 0; const completedIndex = learning.lessonIndex;
-  if (wasLesson && !state.completedLessons.includes(completedIndex)) {
-    state.completedLessons.push(completedIndex); state.completedLessons.sort((a,b) => a-b); state.daily.lessons += 1;
-    const oldDate = state.lastStudyDate; const today = todayKey();
-    if (oldDate !== today) {
-      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
-      if (oldDate && oldDate !== yesterday) { if (state.items.streakKeep > 0) { state.items.streakKeep -= 1; toast("Streak Keep が今日をつなぎました。", "good"); } else state.streak = 1; }
-      else state.streak += 1;
-      state.lastStudyDate = today;
-      state.streakHistory = [...new Set([...(state.streakHistory || []), today])].slice(-90);
-    }
-    if (!state.ownedBadges.includes("first-step")) state.ownedBadges.push("first-step");
-    toast("1 LESSON 完了。今日の最低目標を達成！", "good");
-    state.ui.modal = `streak:${state.streak}`;
-  } else toast("復習、おつかれさま。", "good");
+  const newLesson = wasLesson && !state.completedLessons.includes(completedIndex);
+  if (newLesson) { state.completedLessons.push(completedIndex); state.completedLessons.sort((a,b) => a-b); state.daily.lessons += 1; }
+  const today = todayKey();
+  if (state.lastStudyDate !== today) {
+    const oldDate = state.lastStudyDate;
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+    if (oldDate && oldDate !== yesterday) { if (state.items.streakKeep > 0) { state.items.streakKeep -= 1; toast("Streak Keep が今日をつなぎました。", "good"); } else state.streak = 1; }
+    else state.streak += 1;
+    state.lastStudyDate = today;
+    state.streakHistory = [...new Set([...(state.streakHistory || []), today])].slice(-90);
+    recordWeeklyChallengeStudy(today);
+    if (state.studyGarden.lastDay !== today) { state.studyGarden.growth = Number(state.studyGarden.growth || 0) + 1; state.studyGarden.lastDay = today; }
+  }
+  if (newLesson && !state.ownedBadges.includes("first-step")) state.ownedBadges.push("first-step");
+  toast(newLesson ? "レッスン完了。今日の目標を達成！" : wasLesson ? "学習完了。記録を更新しました！" : "復習完了。学びの木が育ちました！", "good");
+  const showStamp = wasLesson && state.lastLessonStampDate !== today;
+  if (wasLesson) state.lastLessonStampDate = today;
+  state.ui.modal = showStamp ? `streak:${state.streak}` : null;
   state.ui.view = "home"; learning = null; persist(); renderApp();
 }
 function learnAction(action) {
@@ -2076,14 +2190,12 @@ function learnAction(action) {
   if (action === "detail") { toast(`${word.word} · 習熟度 ${mastery(word.id)}%（${masteryText(mastery(word.id))}）`); }
 }
 const capsuleRewards = [
-  { name: "SAKURA GLASS テーマ", probability: 25, grant: () => addTheme("sakura") },
-  { name: "OCEAN GLASS テーマ", probability: 15, grant: () => addTheme("ocean") },
-  { name: "AURORA テーマ", probability: 12, grant: () => addTheme("aurora") },
-  { name: "HP +1", probability: 15, grant: () => { const wasFull = state.hp >= 5; state.hp = Math.min(5, state.hp + 1); if (wasFull) state.items.hpStock += 1; } },
-  { name: "HP回復ストック", probability: 12, grant: () => state.items.hpStock += 1 },
-  { name: "Streak Keep", probability: 8, grant: () => state.items.streakKeep += 1 },
-  { name: "FOCUS バッジ", probability: 8, grant: () => addBadge("focus") },
-  { name: "SAKURA STAR バッジ", probability: 5, grant: () => addBadge("sakura-star") }
+  { name: "HP +3", probability: 25, grant: () => { state.hp = Math.min(30, state.hp + 3); state.hpUpdatedAt = Date.now(); } },
+  { name: "HP +5", probability: 20, grant: () => { state.hp = Math.min(30, state.hp + 5); state.hpUpdatedAt = Date.now(); } },
+  { name: "HP回復ストック", probability: 15, grant: () => state.items.hpStock += 1 },
+  { name: "Streak Keep", probability: 10, grant: () => state.items.streakKeep += 1 },
+  { name: "FOCUS バッジ", probability: 15, grant: () => addBadge("focus") },
+  { name: "SAKURA STAR バッジ", probability: 15, grant: () => addBadge("sakura-star") }
 ];
 function pickCapsuleReward() { const point = Math.random() * 100; let cursor = 0; return capsuleRewards.find(item => { cursor += item.probability; return point < cursor; }) || capsuleRewards[capsuleRewards.length - 1]; }
 function useCapsule() {
@@ -2104,24 +2216,11 @@ function shareProfile() {
   else if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast("共有用テキストをコピーしました。", "good")).catch(() => toast(text));
   else toast(text);
 }
-function exportDataFile() {
-  const blob = new Blob([JSON.stringify({ ...state, ui: { ...state.ui, modal: null } }, null, 2)], { type: "application/json" });
-  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `tango-backup-${todayKey()}.json`; link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 500); toast("学習データをJSONファイルに保存しました。", "good");
-}
-function importDataFile(file) {
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => { try { state = mergeState(JSON.parse(reader.result)); persist(); renderApp(); toast("学習データを復元しました。", "good"); } catch { toast("このJSONファイルは読み込めませんでした。", "bad"); } };
-  reader.readAsText(file);
-}
 async function saveProfile(form) {
   const formData = new FormData(form);
   const displayName = String(formData.get("displayName") || "").trim();
-  const avatarId = String(formData.get("avatarId") || "aqua");
   if (!displayName) { toast("表示名を入力してください。", "bad"); return; }
   state.profile.name = displayName;
-  state.profile.avatarId = avatars.some(a => a.id === avatarId) ? avatarId : "aqua";
   persist({ sync: false });
   state.ui.modal = null; renderApp();
   let cloudUpdated = false;
@@ -2131,17 +2230,24 @@ async function saveProfile(form) {
   }
   persist(); toast(cloudUpdated ? "プロフィールを更新しました。" : "プロフィールを端末に保存しました。クラウド同期は後で再試行します。", cloudUpdated ? "good" : "normal");
 }
-async function handleAuth(form) {
-  const data = new FormData(form); const email = String(data.get("email") || "").trim(); const password = String(data.get("password") || "");
-  if (!isFirebaseConfigured() || !firebaseAuth) { toast("現在ログイン機能を利用できません。学習データはこの端末に保存されています。", "bad"); return; }
+async function handleOAuthSignIn(providerName) {
+  if (!isFirebaseConfigured() || !firebaseAuth) { toast("ログイン機能が設定されていません。", "bad"); return; }
+  const provider = providerName === "apple" ? new firebase.auth.OAuthProvider("apple.com") : new firebase.auth.GoogleAuthProvider();
+  if (providerName === "apple") { provider.addScope("email"); provider.addScope("name"); provider.setCustomParameters({ locale: "ja" }); }
   try {
-    const signup = state.ui.authTab === "signup";
-    if (signup) await firebaseAuth.createUserWithEmailAndPassword(email, password);
-    else await firebaseAuth.signInWithEmailAndPassword(email, password);
+    if (window.matchMedia("(max-width: 700px)").matches) await firebaseAuth.signInWithRedirect(provider);
+    else await firebaseAuth.signInWithPopup(provider);
     state.ui.modal = null; renderApp();
   } catch (error) {
-    const map = { "auth/email-already-in-use":"このメールアドレスは登録済みです。", "auth/invalid-email":"メールアドレスを確認してください。", "auth/weak-password":"パスワードは6文字以上にしてください。", "auth/invalid-credential":"メールアドレスまたはパスワードが違います。", "auth/user-not-found":"アカウントが見つかりません。", "auth/wrong-password":"メールアドレスまたはパスワードが違います。" };
-    toast(map[error.code] || "ログイン処理に失敗しました。", "bad");
+    if (["auth/popup-closed-by-user", "auth/cancelled-popup-request"].includes(error?.code)) return;
+    if (error?.code === "auth/popup-blocked") { try { await firebaseAuth.signInWithRedirect(provider); } catch { toast("ログイン画面を開けませんでした。", "bad"); } return; }
+    const messages = {
+      "auth/account-exists-with-different-credential": "このメールアドレスは別のログイン方法で登録されています。",
+      "auth/operation-not-allowed": `${providerName === "apple" ? "Apple" : "Google"}ログインがFirebaseで有効になっていません。`,
+      "auth/unauthorized-domain": "このサイトのドメインがFirebaseの承認済みドメインに登録されていません。",
+      "auth/popup-blocked": "ログイン画面がブロックされました。ポップアップを許可してもう一度お試しください。"
+    };
+    toast(messages[error?.code] || "ログインできませんでした。時間をおいて再度お試しください。", "bad");
   }
 }
 
@@ -2153,26 +2259,38 @@ async function handleLogout() { try { if (firebaseAuth) await firebaseAuth.signO
 window.addEventListener("click", event => {
   const target = event.target.closest("button, [data-close-modal]"); if (!target) return;
   if (target.hasAttribute("data-close-modal") && event.target === target) { state.ui.modal = null; renderApp(); return; }
-  if (target.dataset.nav) { state.ui.view = target.dataset.nav; state.ui.modal = null; renderApp(); if (target.dataset.nav === "ranking") loadLeaderboard(); if (target.dataset.nav === "friends") loadSocial(); return; }
+  if (target.dataset.nav) {
+    const requested = target.dataset.nav;
+    if (["profile", "friends", "collection"].includes(requested)) { state.ui.view = "community"; state.ui.hubTab = requested; }
+    else state.ui.view = requested;
+    state.ui.modal = null; renderApp();
+    if (requested === "ranking") loadLeaderboard();
+    if (requested === "friends" || (requested === "community" && state.ui.hubTab === "friends")) loadSocial();
+    return;
+  }
+  if (target.dataset.hubTab) { state.ui.hubTab = target.dataset.hubTab; renderApp(); if (state.ui.hubTab === "friends") loadSocial(); return; }
   if (target.dataset.start) { startLearning(target.dataset.start); return; }
   if (target.dataset.rankTab) { state.ui.rankingTab = target.dataset.rankTab; loadLeaderboard(); return; }
+  if (target.dataset.action === "reload-ranking") { loadLeaderboard(); return; }
+  if (target.dataset.action === "toggle-password") { const input = document.querySelector("#password"); if (input) { const show = input.type === "password"; input.type = show ? "text" : "password"; target.textContent = show ? "非表示" : "表示"; } return; }
   if (target.dataset.socialTab) { state.ui.socialTab = target.dataset.socialTab; if (target.dataset.socialTab !== "group") loadLeaderboard(); else renderApp(); return; }
   if (target.dataset.selectGroup) { state.ui.selectedGroup = target.dataset.selectGroup; state.ui.modal = null; loadLeaderboard(); return; }
   if (target.dataset.themeSelect) return;
-  if (target.dataset.authTab) { state.ui.authTab = target.dataset.authTab; renderApp(); return; }
+  if (target.dataset.authProvider) { target.disabled = true; target.classList.add("loading"); handleOAuthSignIn(target.dataset.authProvider).finally(() => { target.disabled = false; target.classList.remove("loading"); }); return; }
   if (target.dataset.badge) { toggleBadge(target.dataset.badge); return; }
   if (target.dataset.equipTheme) { state.equippedTheme = target.dataset.equipTheme; state.settings.dark = true; persist(); renderApp(); toast(`${themes.find(t => t.id === state.equippedTheme)?.name} を装備しました。`, "good"); return; }
   if (target.dataset.testAnswer !== undefined) { testAnswer(Number(target.dataset.testAnswer)); return; }
+  if (target.dataset.action === "dont-know") { dontKnowTestAnswer(); return; }
   if (target.dataset.learnAction) { learnAction(target.dataset.learnAction); return; }
   const action = target.dataset.action;
   if (!action) return;
   if (action === "theme") { state.settings.dark = !state.settings.dark; persist(); renderApp(); }
-  if (action === "profile") { state.ui.view = "profile"; renderApp(); }
+  if (action === "profile") { state.ui.view = "community"; state.ui.hubTab = "profile"; renderApp(); }
   if (action === "login") { state.ui.modal = "login"; renderApp(); }
   if (action === "logout") { handleLogout(); }
   if (action === "edit-profile") { state.ui.modal = "edit-profile"; renderApp(); }
   if (action === "copy-user-id") copyUserId();
-  if (action === "remove-avatar-photo") { state.profile.avatarImage = ""; persist({ sync: false }); state.ui.modal = "edit-profile"; renderApp(); toast("プロフィール写真を削除しました。", "good"); }
+  if (action === "reset-avatar-photo") { state.profile.avatarImage = ""; persist({ sync: false }); state.ui.modal = "edit-profile"; renderApp(); toast("user.png に戻しました。", "good"); }
   if (action === "social-settings") { state.ui.modal = "social-settings"; renderApp(); }
   if (action === "view-friend") { loadFriendProfile(target.dataset.userId).catch(() => toast("プロフィールを読み込めませんでした。", "bad")); }
   if (action === "toggle-follow") { followUser(target.dataset.userId, target.dataset.userName).catch(() => toast("フォローを更新できませんでした。", "bad")); }
@@ -2185,16 +2303,16 @@ window.addEventListener("click", event => {
   if (action === "friend-streak") { state.ui.modal = "friend-streak-details"; renderApp(); }
   if (action === "close-modal" || action === "close-streak") { state.ui.modal = null; renderApp(); }
   if (action === "share") shareProfile();
-  if (action === "export-data") exportDataFile();
-  if (action === "import-data") document.querySelector("#data-file-input")?.click();
   if (action === "sound") { state.settings.sound = !state.settings.sound; persist(); renderApp(); toast(state.settings.sound ? "サウンドをオンにしました。" : "サウンドをオフにしました。"); }
-  if (action === "capsule") useCapsule();
-  if (action === "use-hp") { if (state.items.hpStock > 0 && state.hp < 5) { state.items.hpStock -= 1; state.hp += 1; persist(); renderApp(); toast("HPを1回復しました。", "good"); } }
+  if (action === "capsule" || action === "capsule-menu") { state.ui.modal = "capsule-menu"; renderApp(); }
+  if (action === "capsule-draw") useCapsule();
+  if (action === "use-hp") { if (state.items.hpStock > 0 && state.hp < 30) { state.items.hpStock -= 1; state.hp = Math.min(30, state.hp + 1); persist(); renderApp(); toast("HPを1回復しました。", "good"); } }
   if (action === "exit-learn") { clearAuto(); clearFever(); learning = null; state.ui.view = "home"; renderApp(); }
-  if (action === "learn-info") toast("タップで意味を表示。意味を見た後、左右スワイプで答えよう。");
+  if (action === "learn-info") toast("タップで意味を表示。覚えたら上へ、復習したいときは下へスワイプ。");
 });
-window.addEventListener("submit", event => { if (event.target.id === "auth-form") { event.preventDefault(); handleAuth(event.target); } if (event.target.id === "profile-form") { event.preventDefault(); saveProfile(event.target).catch(() => toast("プロフィールを更新できませんでした。", "bad")); } if (event.target.id === "friend-form") { event.preventDefault(); addFriendByUid(String(new FormData(event.target).get("friendUid") || "")).catch(() => toast("フレンドを追加できませんでした。", "bad")); } if (event.target.id === "group-form") { event.preventDefault(); createGroup(String(new FormData(event.target).get("groupName") || ""), String(new FormData(event.target).get("groupType") || "personal"), String(new FormData(event.target).get("parentGroupId") || "")).catch(() => toast("グループを作成できませんでした。", "bad")); } if (event.target.id === "join-group-form") { event.preventDefault(); joinGroup(String(new FormData(event.target).get("groupId") || "")).catch(() => toast("グループに参加できませんでした。", "bad")); } });
-window.addEventListener("change", event => { if (event.target.matches("[data-theme-select]")) { state.equippedTheme = event.target.value; state.settings.dark = true; persist(); renderApp(); toast(`${themes.find(t => t.id === state.equippedTheme)?.name || "テーマ"} に変更しました。`, "good"); } if (event.target.id === "data-file-input") importDataFile(event.target.files?.[0]); if (event.target.id === "avatar-file-input") handleAvatarFile(event.target.files?.[0]); });
+window.addEventListener("submit", event => { if (event.target.id === "profile-form") { event.preventDefault(); saveProfile(event.target).catch(() => toast("プロフィールを更新できませんでした。", "bad")); } if (event.target.id === "friend-form") { event.preventDefault(); addFriendByUid(String(new FormData(event.target).get("friendUid") || "")).catch(() => toast("フレンドを追加できませんでした。", "bad")); } if (event.target.id === "group-form") { event.preventDefault(); createGroup(String(new FormData(event.target).get("groupName") || ""), String(new FormData(event.target).get("groupType") || "personal"), String(new FormData(event.target).get("parentGroupId") || "")).catch(() => toast("グループを作成できませんでした。", "bad")); } if (event.target.id === "join-group-form") { event.preventDefault(); joinGroup(String(new FormData(event.target).get("groupId") || "")).catch(() => toast("グループに参加できませんでした。", "bad")); } });
+window.addEventListener("submit", event => { if (event.target.id === "spelling-form") checkSpelling(event); });
+window.addEventListener("change", event => { if (event.target.matches("[data-theme-select]")) { state.equippedTheme = event.target.value; state.settings.dark = true; persist(); renderApp(); toast(`${themes.find(t => t.id === state.equippedTheme)?.name || "テーマ"} に変更しました。`, "good"); } if (event.target.id === "avatar-file-input") handleAvatarFile(event.target.files?.[0]); });
 window.addEventListener("keydown", event => { if (event.key === "Escape" && state.ui.modal) { state.ui.modal = null; renderApp(); } });
 
 initFirebase();
